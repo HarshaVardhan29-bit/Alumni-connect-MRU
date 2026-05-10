@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import GoogleRoleModal from '../components/GoogleRoleModal';
 
 export default function LoginPage() {
-  const { login, googleLogin, completeGoogleLogin, pendingGoogle } = useAuth();
+  const { login, googleLogin, completeGoogleLogin, pendingGoogle, user } = useAuth();
   const navigate  = useNavigate();
   const [params]  = useSearchParams();
 
@@ -16,6 +16,11 @@ export default function LoginPage() {
   const [error, setError]       = useState(params.get('error') ? 'Google sign-in failed. Please try again.' : '');
   const [loading, setLoading]   = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+
+  // If user is already logged in (e.g. after Google redirect), go to feed
+  useEffect(() => {
+    if (user) navigate('/feed');
+  }, [user]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -36,15 +41,18 @@ export default function LoginPage() {
     setGoogleLoading(true); setError('');
     try {
       const result = await googleLogin();
-      // isNewUser → modal will appear via pendingGoogle state, don't navigate yet
-      if (!result.isNewUser) navigate('/feed');
+      // On production, googleLogin() triggers a redirect — result will be undefined
+      // The redirect result is handled in AuthContext useEffect
+      if (result && !result.isNewUser) navigate('/feed');
+      // If result is undefined, page is redirecting — keep loading state
     } catch (err) {
       if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
         setGoogleLoading(false);
         return;
       }
       setError(err.response?.data?.message || 'Google sign-in failed. Please try again.');
-    } finally { setGoogleLoading(false); }
+      setGoogleLoading(false);
+    }
   };
 
   return (
