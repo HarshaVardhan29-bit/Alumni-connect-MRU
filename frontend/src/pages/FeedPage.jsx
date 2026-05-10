@@ -58,21 +58,19 @@ function WhoToConnect() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Get current user's following list + all alumni, then filter
     Promise.all([
-      api.get('/users/alumni'),
+      api.get('/users/all'),
       api.get('/users/me'),
-    ]).then(([alumniRes, meRes]) => {
+    ]).then(([allRes, meRes]) => {
       const myFollowing = new Set((meRes.data.following || []).map(String));
       const myId = String(user?._id || user?.id || '');
-      // Filter out already-followed and self
-      const suggestions = alumniRes.data
+      const suggestions = allRes.data
         .filter(p => !myFollowing.has(String(p._id)) && String(p._id) !== myId)
         .slice(0, 3);
       setPeople(suggestions);
       setFollowed(myFollowing);
     }).catch(() => {
-      api.get('/users/alumni').then(r => {
+      api.get('/users/all').then(r => {
         const myId = String(user?._id || user?.id || '');
         setPeople(r.data.filter(p => String(p._id) !== myId).slice(0, 3));
       }).catch(() => {});

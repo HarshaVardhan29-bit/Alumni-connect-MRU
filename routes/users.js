@@ -218,6 +218,17 @@ router.get('/alumni', protect, async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
+// GET /api/users/all — list ALL users (for explore/search)
+router.get('/all', protect, async (req, res) => {
+  try {
+    const users = await User.find({
+      isActive: true,
+      _id: { $ne: req.user._id }
+    }).select('-password').limit(200);
+    res.json(users);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
 // GET /api/users/:id  — public profile
 router.get('/:id', protect, async (req, res) => {
   try {

@@ -11,10 +11,13 @@ const firebaseConfig = {
   measurementId:     import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
-const app      = initializeApp(firebaseConfig);
-export const auth     = getAuth(app);
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
 // Request profile + email scopes
 googleProvider.addScope('profile');
 googleProvider.addScope('email');
+
+// Force account selection every time
+googleProvider.setCustomParameters({ prompt: 'select_account' });

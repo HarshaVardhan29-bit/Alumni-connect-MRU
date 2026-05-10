@@ -12,7 +12,7 @@ export default function ExplorePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get('/users/alumni')
+    api.get('/users/all')
       .then(r => { setPeople(r.data); setFiltered(r.data); })
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -37,8 +37,8 @@ export default function ExplorePage() {
     <DashLayout>
       <div className="explore-wrap">
         <div className="explore-header">
-          <h2 className="feed-page-title">Explore Alumni</h2>
-          <p className="explore-sub">Discover and connect with MRU alumni</p>
+          <h2 className="feed-page-title">Explore People</h2>
+          <p className="explore-sub">Discover and connect with MRU alumni, students and faculty</p>
         </div>
 
         <div className="explore-search-row">
