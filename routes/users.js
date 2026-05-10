@@ -34,8 +34,6 @@ router.delete('/push-unsubscribe', protect, async (req, res) => {
 router.get('/vapid-public-key', (req, res) => {
   res.json({ key: process.env.VAPID_PUBLIC_KEY || '' });
 });
-  res.json(req.user);
-});
 
 // PUT /api/users/avatar — upload profile picture (base64)
 router.put('/avatar', protect, async (req, res) => {
