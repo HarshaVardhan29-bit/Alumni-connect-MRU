@@ -88,14 +88,26 @@ router.post('/request', protect, async (req, res) => {
 // GET /api/mentorship/my  — get all mentorships for current user
 router.get('/my', protect, async (req, res) => {
   try {
-    // Query by either side so both student and alumni get full data
+    const Message = require('../models/Message');
+
     const list = await Mentorship.find({
       $or: [{ student: req.user._id }, { alumni: req.user._id }]
     })
-      .populate('student', 'firstName lastName email industry careerGoals targetIndustry avatar')
-      .populate('alumni',  'firstName lastName email industry company designation batch skills bio avatar')
-      .sort('-createdAt');
-    res.json(list);
+      .populate('student', 'firstName lastName email industry careerGoals targetIndustry avatar role')
+      .populate('alumni',  'firstName lastName email industry company designation batch skills bio avatar role')
+      .sort('-updatedAt'); // sort by most recently updated
+
+    // Attach last message for each conversation
+    const withLastMsg = await Promise.all(list.map(async (m) => {
+      const lastMsg = await Message.findOne({ mentorship: m._id })
+        .sort('-createdAt')
+        .select('text type sender createdAt')
+        .populate('sender', 'firstName lastName')
+        .lean();
+      return { ...m.toObject(), lastMessage: lastMsg || null };
+    }));
+
+    res.json(withLastMsg);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 

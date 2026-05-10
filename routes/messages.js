@@ -4,6 +4,27 @@ const Mentorship = require('../models/Mentorship');
 const { protect } = require('../middleware/auth');
 const { sendPushToUser } = require('../utils/pushNotification');
 
+// POST /api/messages/:mentorshipId/read — mark messages as read (lightweight)
+router.post('/:mentorshipId/read', protect, async (req, res) => {
+  try {
+    const m = await Mentorship.findById(req.params.mentorshipId);
+    if (!m) return res.status(404).json({ message: 'Not found' });
+    const isParty = [m.student.toString(), m.alumni.toString()].includes(req.user._id.toString());
+    if (!isParty) return res.status(403).json({ message: 'Forbidden' });
+    const updated = await Message.updateMany(
+      { mentorship: req.params.mentorshipId, sender: { $ne: req.user._id }, read: false },
+      { read: true }
+    );
+    if (updated.modifiedCount > 0) {
+      req.app.get('io')?.to(req.params.mentorshipId).emit('messages:read', {
+        mentorshipId: req.params.mentorshipId,
+        readBy: req.user._id,
+      });
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
 // GET /api/messages/:mentorshipId
 router.get('/:mentorshipId', protect, async (req, res) => {
   try {

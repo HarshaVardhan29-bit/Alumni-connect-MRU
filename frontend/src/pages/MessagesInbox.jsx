@@ -42,7 +42,16 @@ const ATTACH_MENU = [
 ];
 const fmtSize = b => b>1048576?`${(b/1048576).toFixed(1)} MB`:`${(b/1024).toFixed(0)} KB`;
 const fmtDur  = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
-const fmtTime = d => { const s=Math.floor((Date.now()-new Date(d))/1000); if(s<3600)return`${Math.floor(s/60)}m`; if(s<86400)return`${Math.floor(s/3600)}h`; return new Date(d).toLocaleDateString('en-IN',{day:'numeric',month:'short'}); };
+const fmtTime = d => {
+  if (!d) return '';
+  const diff = Date.now() - new Date(d).getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return 'now';
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  if (s < 604800) return new Date(d).toLocaleDateString('en-IN', { weekday: 'short' });
+  return new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+};
 const WAVE_H  = Array.from({length:20},()=>8+Math.floor(Math.random()*16));
 const GROUP_EMOJIS = ['👥','🎓','💼','🚀','💡','🌟','🏆','📚','🤝','🌐','💻','🎯'];
 
@@ -480,9 +489,9 @@ function ChatPanel({ mentorship, user, socketRef }) {
       const msgMid = msg.mentorshipId || msg.mentorship;
       if (msgMid && String(msgMid) !== String(id)) return;
       setMessages(prev => prev.find(m => m._id === msg._id) ? prev : [...prev, msg]);
-      // Mark as read if we're the recipient
+      // Mark as read silently if we're the recipient (fire and forget)
       if (String(msg.sender?._id || msg.sender) !== uid) {
-        api.get(`/messages/${id}`).catch(() => {});
+        api.post(`/messages/${id}/read`).catch(() => {});
       }
     };
 
@@ -527,7 +536,17 @@ function ChatPanel({ mentorship, user, socketRef }) {
     };
   }, [id, otherId, socketRef?.current]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // Scroll to bottom when new messages arrive
+  useEffect(() => { 
+    if (messages.length > 0) bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); 
+  }, [messages]);
+
+  // Scroll to bottom instantly when chat first loads
+  useEffect(() => {
+    if (!loading && messages.length > 0) {
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'auto' }), 50);
+    }
+  }, [loading, id]);
 
   const handleSend = async (payload) => {
     const fullPayload = replyTo ? { ...payload, replyToId: replyTo._id } : payload;
@@ -938,7 +957,15 @@ function GroupChatPanel({ group, user, socketRef, onLeave, onGroupUpdate }) {
     }
   }, [group._id, socketRef?.current]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => { 
+    if (messages.length > 0) bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); 
+  }, [messages]);
+
+  useEffect(() => {
+    if (!loading && messages.length > 0) {
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'auto' }), 50);
+    }
+  }, [loading, group._id]);
 
   const handleSend = async (payload) => {
     const fullPayload = replyTo ? { ...payload, replyTo: replyTo._id } : payload;
@@ -1602,9 +1629,32 @@ export default function MessagesInbox() {
   useEffect(() => {
     api.get('/mentorship/my').then(r => {
       const accepted = r.data.filter(m => m.status === 'accepted');
+      // Sort by updatedAt descending (most recent first)
+      accepted.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
       setConvs(accepted);
+
+      // Initialize lastMessages from each conversation's last message
+      const myId = String(user?._id || user?.id || '');
+      const initLast = {};
+      accepted.forEach(m => {
+        if (m.lastMessage) {
+          const senderId = String(m.lastMessage.sender?._id || m.lastMessage.sender || '');
+          initLast[m._id] = {
+            text: m.lastMessage.type === 'image' ? '📷 Photo'
+                : m.lastMessage.type === 'video' ? '🎥 Video'
+                : m.lastMessage.type === 'voice' ? '🎤 Voice message'
+                : m.lastMessage.type === 'file'  ? '📎 File'
+                : (m.lastMessage.text || ''),
+            type: m.lastMessage.type,
+            senderId,
+            time: m.lastMessage.createdAt || m.updatedAt,
+            isFromMe: senderId === myId,
+          };
+        }
+      });
+      setLastMessages(initLast);
+
       // Join all conversation rooms so we receive real-time messages
-      // for ALL chats, not just the currently open one
       const socket = socketRef?.current;
       if (socket) {
         accepted.forEach(m => socket.emit('join_room', m._id));
