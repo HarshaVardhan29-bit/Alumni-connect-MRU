@@ -1,37 +1,58 @@
 {
-  "name": "MRU MentorConnect AI",
-  "short_name": "MentorConnect",
-  "description": "Alumni Network Platform for MRU",
-  "start_url": "/",
+  "name": "MRU MentorConnect",
+  "short_name": "MRU Connect",
+  "description": "Alumni Network & Mentorship Platform — Manav Rachna University",
+  "start_url": "/feed",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#0a0a0f",
-  "theme_color": "#6366f1",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#07070f",
+  "theme_color": "#07070f",
   "orientation": "portrait-primary",
+  "lang": "en",
   "icons": [
     {
       "src": "/favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
   ],
   "categories": ["education", "social", "networking"],
-  "screenshots": [],
   "shortcuts": [
     {
       "name": "Feed",
+      "short_name": "Feed",
       "url": "/feed",
-      "description": "View your feed"
+      "icons": [{ "src": "/favicon.svg", "sizes": "any" }]
     },
     {
       "name": "Messages",
+      "short_name": "Messages",
       "url": "/messages",
-      "description": "Check messages"
+      "icons": [{ "src": "/favicon.svg", "sizes": "any" }]
     },
     {
-      "name": "Profile",
-      "url": "/profile",
-      "description": "View your profile"
+      "name": "Explore",
+      "short_name": "Explore",
+      "url": "/explore",
+      "icons": [{ "src": "/favicon.svg", "sizes": "any" }]
     }
-  ]
+  ],
+  "screenshots": [
+    {
+      "src": "/mru-campus.webp",
+      "sizes": "1280x720",
+      "type": "image/webp",
+      "form_factor": "wide",
+      "label": "MRU Alumni Network Feed"
+    }
+  ],
+  "prefer_related_applications": false
 }

@@ -2,6 +2,7 @@ const router   = require('express').Router();
 const Group    = require('../models/Group');
 const GroupMessage = require('../models/GroupMessage');
 const { protect } = require('../middleware/auth');
+const { sendPushToUsers } = require('../utils/pushNotification');
 
 const pop = q => q.populate('members', 'firstName lastName role designation company avatar')
                   .populate('admins',  'firstName lastName role')
@@ -331,6 +332,22 @@ router.post('/:id/messages', protect, async (req, res) => {
       .populate({ path: 'replyTo', populate: { path: 'sender', select: 'firstName lastName avatar' } });
     req.app.get('io')?.to(`group_${req.params.id}`).emit('receive_group_message', populated);
     await Group.findByIdAndUpdate(req.params.id, { updatedAt: new Date() });
+    
+    // ── Push notification to all group members except sender ──
+    const recipientIds = group.members
+      .map(String)
+      .filter(id => id !== String(req.user._id));
+    
+    if (recipientIds.length > 0) {
+      await sendPushToUsers(recipientIds, {
+        title: `${group.name}`,
+        body: `${req.user.firstName}: ${(text || '').slice(0, 100) || '📎 Attachment'}`,
+        url: `/groups/${req.params.id}`,
+        type: 'message',
+        data: { groupId: req.params.id, messageId: msg._id },
+      });
+    }
+    
     res.status(201).json(populated);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });

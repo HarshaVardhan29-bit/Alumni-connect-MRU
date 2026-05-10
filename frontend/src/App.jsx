@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useAuth } from './context/AuthContext';
 import PageLoader from './components/PageLoader';
 import NetworkStatus from './components/NetworkStatus';
+import ConnectionStatus from './components/ConnectionStatus';
 import LandingPage    from './pages/LandingPage';
 import LoginPage      from './pages/LoginPage';
 import RegisterPage   from './pages/RegisterPage';
@@ -35,6 +36,13 @@ function PrivateRoute({ children }) {
   return user ? children : <Navigate to="/login" />;
 }
 
+// Redirect logged-in users away from public pages
+function PublicRoute({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return null; // don't flash anything
+  return user ? <Navigate to="/feed" replace /> : children;
+}
+
 function AdminRoute({ children }) {
   const token = localStorage.getItem('adminToken');
   return token ? children : <Navigate to="/admin/login" />;
@@ -42,15 +50,17 @@ function AdminRoute({ children }) {
 
 export default function App() {
   const [loaded, setLoaded] = useState(false);
+  const { user } = useAuth();
 
   return (
     <>
       <NetworkStatus />
+      {user && <ConnectionStatus />}
       {!loaded && <PageLoader onDone={() => setLoaded(true)} />}
       <Routes>
-        <Route path="/"                        element={<LandingPage />} />
-        <Route path="/login"                   element={<LoginPage />} />
-        <Route path="/register"                element={<RegisterPage />} />
+        <Route path="/"                        element={<PublicRoute><LandingPage /></PublicRoute>} />
+        <Route path="/login"                   element={<PublicRoute><LoginPage /></PublicRoute>} />
+        <Route path="/register"                element={<PublicRoute><RegisterPage /></PublicRoute>} />
         <Route path="/dashboard"               element={<PrivateRoute><Dashboard /></PrivateRoute>} />
         <Route path="/feed"                    element={<PrivateRoute><FeedPage /></PrivateRoute>} />
         <Route path="/post/:id"                element={<PrivateRoute><PostDetail /></PrivateRoute>} />

@@ -2,6 +2,7 @@ const router = require('express').Router();
 const Message = require('../models/Message');
 const Mentorship = require('../models/Mentorship');
 const { protect } = require('../middleware/auth');
+const { sendPushToUser } = require('../utils/pushNotification');
 
 // GET /api/messages/:mentorshipId
 router.get('/:mentorshipId', protect, async (req, res) => {
@@ -76,6 +77,21 @@ router.post('/:mentorshipId', protect, async (req, res) => {
       attachment: attachment || undefined,
     });
     const populated = await msg.populate('sender', 'firstName lastName role avatar');
+    // ── Emit to socket room so other user gets message in real-time ──
+    req.app.get('io')?.to(req.params.mentorshipId).emit('receive_message', {
+      ...populated.toObject(),
+      mentorshipId: req.params.mentorshipId,
+    });
+    // ── Push notification to the other party ──
+    const otherId = String(m.student) === String(req.user._id)
+      ? String(m.alumni)
+      : String(m.student);
+    await sendPushToUser(otherId, {
+      title: `${req.user.firstName} ${req.user.lastName}`,
+      body:  (text || '').slice(0, 100) || '📎 Attachment',
+      url:   `/messages/${req.params.mentorshipId}`,
+      type:  'message',
+    });
     res.status(201).json(populated);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });

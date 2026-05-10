@@ -8,6 +8,8 @@ const pop = q => q
   .populate('author', 'firstName lastName role industry company designation batch avatar')
   .populate({ path: 'replyTo', populate: { path: 'author', select: 'firstName lastName avatar' } });
 
+const { sendPushToUser } = require('../utils/pushNotification');
+
 const emitNotif = async (req, notif) => {
   try {
     const saved = await Notification.create(notif);
@@ -15,6 +17,23 @@ const emitNotif = async (req, notif) => {
       .populate('sender', 'firstName lastName avatar')
       .populate('post', 'text');
     req.app.get('io')?.to(`user_${notif.recipient}`).emit('notification', populated);
+
+    // Send push notification
+    const urlMap = {
+      like:     notif.post ? `/post/${notif.post}` : '/feed',
+      comment:  notif.post ? `/post/${notif.post}` : '/feed',
+      retweet:  notif.post ? `/post/${notif.post}` : '/feed',
+      follow:   `/profile/${notif.sender}`,
+      message:  '/messages',
+      mentorship_request: '/mentorship',
+      mentorship_accepted: '/mentorship',
+    };
+    await sendPushToUser(notif.recipient, {
+      title: 'MRU Connect',
+      body:  notif.message,
+      url:   urlMap[notif.type] || '/',
+      type:  notif.type,
+    });
   } catch {}
 };
 

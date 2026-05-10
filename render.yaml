@@ -51,6 +51,13 @@ services:
         sync: false
       - key: GOOGLE_CALLBACK_URL
         sync: false
+      # ── Web Push ──
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_EMAIL
+        sync: false
       # ── Frontend URL (same as this service after deploy) ──
       - key: FRONTEND_URL
         sync: false

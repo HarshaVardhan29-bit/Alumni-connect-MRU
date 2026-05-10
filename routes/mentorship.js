@@ -3,11 +3,19 @@ const Mentorship = require('../models/Mentorship');
 const Notification = require('../models/Notification');
 const { protect } = require('../middleware/auth');
 
+const { sendPushToUser } = require('../utils/pushNotification');
+
 const emitNotif = async (req, notif) => {
   try {
     const saved = await Notification.create(notif);
     const populated = await Notification.findById(saved._id).populate('sender', 'firstName lastName avatar');
     req.app.get('io')?.to(`user_${notif.recipient}`).emit('notification', populated);
+    await sendPushToUser(notif.recipient, {
+      title: 'MRU Connect',
+      body:  notif.message,
+      url:   '/mentorship',
+      type:  notif.type,
+    });
   } catch {}
 };
 

@@ -1426,7 +1426,7 @@ function CreateGroupModal({ type, onClose, onCreate }) {
 export default function MessagesInbox() {
   const { id: activeId } = useParams();
   const { user }    = useAuth();
-  const socketRef   = useSocket();
+  const { socketRef } = useSocket();
   const navigate    = useNavigate();
 
   const [tab, setTab]           = useState('chats');

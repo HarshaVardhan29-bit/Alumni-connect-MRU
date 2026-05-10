@@ -155,6 +155,7 @@ app.get('/__/auth/*', async (req, res) => {
 
 // Socket.io — real-time chat + notifications + WebRTC signaling
 const onlineUsers = new Map(); // userId -> Set of socketIds
+const typingUsers = new Map(); // roomId -> Map(userId -> timeout)
 
 io.on('connection', (socket) => {
   let connectedUserId = null;
@@ -176,12 +177,67 @@ io.on('connection', (socket) => {
   socket.on('join_room', (mentorshipId) => socket.join(mentorshipId));
   socket.on('send_message', (data) => io.to(data.mentorshipId).emit('receive_message', data));
 
+  // Typing indicator for 1-on-1 chats
+  socket.on('user:typing', ({ mentorshipId, userId, name }) => {
+    if (!typingUsers.has(mentorshipId)) typingUsers.set(mentorshipId, new Map());
+    const roomTyping = typingUsers.get(mentorshipId);
+    
+    // Clear existing timeout
+    if (roomTyping.has(userId)) clearTimeout(roomTyping.get(userId));
+    
+    // Broadcast typing
+    socket.to(mentorshipId).emit('user:typing', { userId, name, isTyping: true });
+    
+    // Auto-clear after 3 seconds
+    const timeout = setTimeout(() => {
+      socket.to(mentorshipId).emit('user:typing', { userId, name, isTyping: false });
+      roomTyping.delete(userId);
+    }, 3000);
+    
+    roomTyping.set(userId, timeout);
+  });
+
+  socket.on('user:stop_typing', ({ mentorshipId, userId }) => {
+    if (typingUsers.has(mentorshipId)) {
+      const roomTyping = typingUsers.get(mentorshipId);
+      if (roomTyping.has(userId)) {
+        clearTimeout(roomTyping.get(userId));
+        roomTyping.delete(userId);
+      }
+    }
+    socket.to(mentorshipId).emit('user:typing', { userId, isTyping: false });
+  });
+
   // Group chat rooms
   socket.on('join_group', (groupId) => socket.join(`group_${groupId}`));
   socket.on('send_group_message', (data) => io.to(`group_${data.groupId}`).emit('receive_group_message', data));
+  
   // Typing indicator for groups
   socket.on('group:typing', ({ groupId, name, userId }) => {
-    socket.to(`group_${groupId}`).emit('group:typing', { name, userId });
+    if (!typingUsers.has(`group_${groupId}`)) typingUsers.set(`group_${groupId}`, new Map());
+    const roomTyping = typingUsers.get(`group_${groupId}`);
+    
+    if (roomTyping.has(userId)) clearTimeout(roomTyping.get(userId));
+    
+    socket.to(`group_${groupId}`).emit('group:typing', { name, userId, isTyping: true });
+    
+    const timeout = setTimeout(() => {
+      socket.to(`group_${groupId}`).emit('group:typing', { name, userId, isTyping: false });
+      roomTyping.delete(userId);
+    }, 3000);
+    
+    roomTyping.set(userId, timeout);
+  });
+
+  socket.on('group:stop_typing', ({ groupId, userId }) => {
+    if (typingUsers.has(`group_${groupId}`)) {
+      const roomTyping = typingUsers.get(`group_${groupId}`);
+      if (roomTyping.has(userId)) {
+        clearTimeout(roomTyping.get(userId));
+        roomTyping.delete(userId);
+      }
+    }
+    socket.to(`group_${groupId}`).emit('group:typing', { userId, isTyping: false });
   });
 
   // Check if a user is online

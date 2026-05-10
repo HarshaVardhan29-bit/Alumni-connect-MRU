@@ -64,6 +64,15 @@ const userSchema = new mongoose.Schema(
     phone: { type: String, default: '' },
     username: { type: String, default: '' },
     deactivatedAt: { type: Date, default: null },
+    // Web Push subscriptions (one per device)
+    pushSubscriptions: [{
+      endpoint:  { type: String },
+      expirationTime: { type: Number, default: null },
+      keys: {
+        p256dh: { type: String },
+        auth:   { type: String },
+      },
+    }],
   },
   { timestamps: true }
 );

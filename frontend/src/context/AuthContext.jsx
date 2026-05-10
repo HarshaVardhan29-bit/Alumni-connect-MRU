@@ -3,6 +3,7 @@ import { signInWithPopup } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
 import api from '../api/axios';
 import SuspendedScreen from '../components/SuspendedScreen';
+import { subscribeToPush } from '../utils/pushSubscribe';
 
 const AuthContext = createContext();
 
@@ -19,17 +20,20 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('account:suspended', handler);
   }, []);
 
-  // On mount: restore session
+  // On mount: restore session instantly from localStorage, then refresh in background
   useEffect(() => {
-    const init = async () => {
-      // Restore existing session
-      const token = localStorage.getItem('token');
-      const stored = localStorage.getItem('user');
-      if (token && stored) {
+    const token = localStorage.getItem('token');
+    const stored = localStorage.getItem('user');
+
+    if (token && stored) {
+      try {
         const parsed = JSON.parse(stored);
         if (!Array.isArray(parsed.savedPosts)) parsed.savedPosts = [];
+        // Set user IMMEDIATELY from cache — no loading delay
         setUser(parsed);
+        setLoading(false); // ← unblock routing right away
 
+        // Refresh in background silently
         const apiBase = import.meta.env.VITE_API_URL === '/api'
           ? '/api'
           : (import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5001') + '/api';
@@ -43,6 +47,13 @@ export function AuthProvider({ children }) {
                 if (data?.suspended) setSuspended(true);
                 return null;
               });
+            }
+            if (r.status === 401) {
+              // Token expired — log out
+              localStorage.removeItem('token');
+              localStorage.removeItem('user');
+              setUser(null);
+              return null;
             }
             return r.ok ? r.json() : null;
           })
@@ -59,14 +70,13 @@ export function AuthProvider({ children }) {
               localStorage.setItem('savedPosts', JSON.stringify(updated.savedPosts));
             }
           })
-          .catch(() => {})
-          .finally(() => setLoading(false));
-      } else {
+          .catch(() => {}); // silent fail — user stays logged in from cache
+      } catch {
         setLoading(false);
       }
-    };
-
-    init();
+    } else {
+      setLoading(false);
+    }
   }, []);
 
   const register = async (data) => {
@@ -82,6 +92,8 @@ export function AuthProvider({ children }) {
     localStorage.setItem('token', res.data.token);
     localStorage.setItem('user', JSON.stringify(res.data.user));
     setUser(res.data.user);
+    // Subscribe to push notifications after login
+    setTimeout(() => subscribeToPush(), 2000);
     return res.data;
   };
 

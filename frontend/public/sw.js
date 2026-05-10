@@ -1,105 +1,216 @@
-// Service Worker for offline support and caching
-const CACHE_NAME = 'mru-mentorconnect-v3';
-const STATIC_CACHE = 'static-v3';
-const DYNAMIC_CACHE = 'dynamic-v3';
+// ═══════════════════════════════════════════════════════════════
+// MRU MentorConnect — Service Worker v6
+// Strategy: Cache-first for assets, Network-first for pages/API
+// Features: Offline support, Push notifications, Background sync
+// ═══════════════════════════════════════════════════════════════
+const CACHE_VERSION = 'v6';
+const STATIC_CACHE  = `mru-static-${CACHE_VERSION}`;
+const DYNAMIC_CACHE = `mru-dynamic-${CACHE_VERSION}`;
+const IMAGE_CACHE   = `mru-images-${CACHE_VERSION}`;
 
-// Assets to cache immediately
-const STATIC_ASSETS = [
+// Core shell — cache on install
+const PRECACHE_ASSETS = [
   '/',
   '/index.html',
   '/favicon.svg',
-  '/icons.svg',
-  '/mru-campus.webp',
+  '/manifest.json',
 ];
 
-// Install event - cache static assets
-self.addEventListener('install', (event) => {
-  console.log('[SW] Installing...');
-  event.waitUntil(
-    caches.open(STATIC_CACHE).then((cache) => {
-      console.log('[SW] Caching static assets');
-      return cache.addAll(STATIC_ASSETS);
-    })
+// ── Install ──────────────────────────────────────────────────────
+self.addEventListener('install', (e) => {
+  e.waitUntil(
+    caches.open(STATIC_CACHE)
+      .then(c => c.addAll(PRECACHE_ASSETS))
+      .then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
-// Activate event - clean old caches
-self.addEventListener('activate', (event) => {
-  console.log('[SW] Activating...');
-  event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
+// ── Activate — purge old caches ──────────────────────────────────
+self.addEventListener('activate', (e) => {
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(
         keys
-          .filter((key) => key !== STATIC_CACHE && key !== DYNAMIC_CACHE)
-          .map((key) => caches.delete(key))
-      );
-    })
+          .filter(k => ![STATIC_CACHE, DYNAMIC_CACHE, IMAGE_CACHE].includes(k))
+          .map(k => caches.delete(k))
+      )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Fetch event - serve from cache, fallback to network
-self.addEventListener('fetch', (event) => {
-  const { request } = event;
+// ── Fetch ────────────────────────────────────────────────────────
+self.addEventListener('fetch', (e) => {
+  const { request } = e;
   const url = new URL(request.url);
 
-  // Skip non-GET requests
+  // Only handle GET
   if (request.method !== 'GET') return;
 
-  // Skip API calls (always fetch fresh)
-  if (url.pathname.startsWith('/api/')) return;
+  // Skip: API, socket.io, Firebase, cross-origin
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/socket.io') ||
+    url.pathname.startsWith('/__/') ||
+    url.origin !== self.location.origin
+  ) return;
 
-  // Skip socket.io
-  if (url.pathname.startsWith('/socket.io')) return;
-
-  // Skip cross-origin requests (Firebase, Google, etc.)
-  if (url.origin !== self.location.origin) return;
-
-  // Network-first strategy for HTML
-  if (request.headers.get('accept') && request.headers.get('accept').includes('text/html')) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const clone = response.clone();
-          caches.open(DYNAMIC_CACHE).then((cache) => cache.put(request, clone));
-          return response;
-        })
-        .catch(() => caches.match(request))
+  // ── Images: cache-first, long TTL ──
+  if (/\.(png|jpg|jpeg|webp|gif|svg|ico)$/.test(url.pathname)) {
+    e.respondWith(
+      caches.open(IMAGE_CACHE).then(async cache => {
+        const cached = await cache.match(request);
+        if (cached) return cached;
+        const res = await fetch(request);
+        if (res.ok) cache.put(request, res.clone());
+        return res;
+      })
     );
     return;
   }
 
-  // Cache-first strategy for static assets (CSS, JS, images)
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
+  // ── JS/CSS assets (hashed filenames): cache-first ──
+  if (/\/assets\//.test(url.pathname)) {
+    e.respondWith(
+      caches.open(STATIC_CACHE).then(async cache => {
+        const cached = await cache.match(request);
+        if (cached) return cached;
+        const res = await fetch(request);
+        if (res.ok) cache.put(request, res.clone());
+        return res;
+      })
+    );
+    return;
+  }
 
-      return fetch(request).then((response) => {
-        // Only cache successful responses
-        if (!response || response.status !== 200 || response.type === 'error') {
-          return response;
-        }
+  // ── HTML pages: network-first, fallback to cache ──
+  if (request.headers.get('accept')?.includes('text/html')) {
+    e.respondWith(
+      fetch(request)
+        .then(res => {
+          if (res.ok) {
+            caches.open(DYNAMIC_CACHE).then(c => c.put(request, res.clone()));
+          }
+          return res;
+        })
+        .catch(() => caches.match(request) || caches.match('/index.html'))
+    );
+    return;
+  }
 
-        const clone = response.clone();
-        caches.open(DYNAMIC_CACHE).then((cache) => {
-          cache.put(request, clone);
-        });
-
-        return response;
-      });
+  // ── Everything else: stale-while-revalidate ──
+  e.respondWith(
+    caches.open(DYNAMIC_CACHE).then(async cache => {
+      const cached = await cache.match(request);
+      const fetchPromise = fetch(request).then(res => {
+        if (res.ok) cache.put(request, res.clone());
+        return res;
+      }).catch(() => cached);
+      return cached || fetchPromise;
     })
   );
 });
 
-// Background sync for offline actions
-self.addEventListener('sync', (event) => {
-  if (event.tag === 'sync-posts') {
-    event.waitUntil(syncPosts());
+// ── Push notifications ───────────────────────────────────────────
+self.addEventListener('push', (e) => {
+  if (!e.data) return;
+  
+  try {
+    const data = e.data.json();
+    const options = {
+      body: data.body || '',
+      icon: data.icon || '/favicon.svg',
+      badge: data.badge || '/favicon.svg',
+      data: { url: data.url || '/', ...data.data },
+      vibrate: data.vibrate || [100, 50, 100],
+      tag: data.tag || 'general',
+      renotify: data.renotify !== false,
+      requireInteraction: data.requireInteraction || false,
+      timestamp: data.timestamp || Date.now(),
+      actions: data.type === 'message' ? [
+        { action: 'reply', title: 'Reply', icon: '/favicon.svg' },
+        { action: 'view', title: 'View', icon: '/favicon.svg' },
+      ] : [],
+    };
+
+    e.waitUntil(
+      self.registration.showNotification(data.title || 'MRU Connect', options)
+    );
+  } catch (err) {
+    console.error('[SW] Push error:', err);
   }
 });
 
-async function syncPosts() {
-  // Sync any pending posts when back online
-  console.log('[SW] Syncing posts...');
+// ── Notification click ───────────────────────────────────────────
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  
+  const url = e.notification.data?.url || '/';
+  
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(clientList => {
+        // Focus existing window if available
+        for (const client of clientList) {
+          if (client.url.includes(url.split('?')[0]) && 'focus' in client) {
+            return client.focus();
+          }
+        }
+        // Open new window
+        if (clients.openWindow) {
+          return clients.openWindow(url);
+        }
+      })
+  );
+});
+
+// ── Background sync for offline messages ─────────────────────────
+self.addEventListener('sync', (e) => {
+  if (e.tag === 'sync-messages') {
+    e.waitUntil(syncOfflineMessages());
+  }
+});
+
+async function syncOfflineMessages() {
+  try {
+    // Get pending messages from IndexedDB
+    const db = await openDB();
+    const tx = db.transaction('pendingMessages', 'readonly');
+    const store = tx.objectStore('pendingMessages');
+    const messages = await store.getAll();
+    
+    // Send each message
+    for (const msg of messages) {
+      try {
+        const response = await fetch(msg.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...msg.headers },
+          body: JSON.stringify(msg.data),
+        });
+        
+        if (response.ok) {
+          // Remove from pending
+          const deleteTx = db.transaction('pendingMessages', 'readwrite');
+          await deleteTx.objectStore('pendingMessages').delete(msg.id);
+        }
+      } catch (err) {
+        console.error('[SW] Sync failed for message:', err);
+      }
+    }
+  } catch (err) {
+    console.error('[SW] Background sync error:', err);
+  }
+}
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('MRUConnect', 1);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('pendingMessages')) {
+        db.createObjectStore('pendingMessages', { keyPath: 'id', autoIncrement: true });
+      }
+    };
+  });
 }

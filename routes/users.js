@@ -1,9 +1,39 @@
 const router = require('express').Router();
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
+const { sendPushToUser } = require('../utils/pushNotification');
 
-// GET /api/users/me
-router.get('/me', protect, async (req, res) => {
+// POST /api/users/push-subscribe — save push subscription
+router.post('/push-subscribe', protect, async (req, res) => {
+  try {
+    const { subscription } = req.body;
+    if (!subscription?.endpoint) return res.status(400).json({ message: 'Invalid subscription' });
+    // Add subscription if not already saved (deduplicate by endpoint)
+    await User.findByIdAndUpdate(req.user._id, {
+      $pull: { pushSubscriptions: { endpoint: subscription.endpoint } } // remove old
+    });
+    await User.findByIdAndUpdate(req.user._id, {
+      $push: { pushSubscriptions: subscription }
+    });
+    res.json({ message: 'Subscribed' });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// DELETE /api/users/push-unsubscribe — remove push subscription
+router.delete('/push-unsubscribe', protect, async (req, res) => {
+  try {
+    const { endpoint } = req.body;
+    await User.findByIdAndUpdate(req.user._id, {
+      $pull: { pushSubscriptions: { endpoint } }
+    });
+    res.json({ message: 'Unsubscribed' });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// GET /api/users/vapid-public-key — get VAPID public key for frontend
+router.get('/vapid-public-key', (req, res) => {
+  res.json({ key: process.env.VAPID_PUBLIC_KEY || '' });
+});
   res.json(req.user);
 });
 
@@ -103,6 +133,13 @@ router.post('/:id/follow', protect, async (req, res) => {
     io?.to(`user_${targetId}`).emit('user:followed', {
       userId: myId,
       name: `${req.user.firstName} ${req.user.lastName}`,
+    });
+    // Push notification for new follower
+    await sendPushToUser(targetId, {
+      title: 'New Follower',
+      body: `${req.user.firstName} ${req.user.lastName} started following you`,
+      url: `/profile/${myId}`,
+      type: 'follow',
     });
     return res.json({ following: true, requested: false });
   } catch (err) { res.status(500).json({ message: err.message }); }
