@@ -67,8 +67,7 @@ app.use(compression({
 }));
 app.use(helmet({
   contentSecurityPolicy: false,
-  // Disable COOP so Google OAuth popup can communicate with the opener window
-  crossOriginOpenerPolicy: false,
+  crossOriginOpenerPolicy: { policy: 'unsafe-none' },
 }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false }));
 app.use(express.json({ limit: '20mb' }));
