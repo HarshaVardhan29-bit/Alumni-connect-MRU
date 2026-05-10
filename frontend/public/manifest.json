@@ -45,14 +45,5 @@
       "icons": [{ "src": "/favicon.svg", "sizes": "any" }]
     }
   ],
-  "screenshots": [
-    {
-      "src": "/mru-campus.webp",
-      "sizes": "1280x720",
-      "type": "image/webp",
-      "form_factor": "wide",
-      "label": "MRU Alumni Network Feed"
-    }
-  ],
   "prefer_related_applications": false
 }

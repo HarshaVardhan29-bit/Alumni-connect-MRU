@@ -341,7 +341,7 @@ function ChatInput({ onSend, placeholder, disabled: inputDisabled, onTyping }) {
 }
 
 /* ── Message Context Menu ── */
-function MsgContextMenu({ msg, mine, pos, onClose, onReply, onCopy, onDelete, onStar, onReact }) {
+function MsgContextMenu({ msg, mine, pos, onClose, onReply, onCopy, onDelete, onStar, onReact, onSave, onOpen }) {
   const ref = useRef();
   const REACTIONS = [
     { emoji: '👍', label: 'Like' },
@@ -351,6 +351,10 @@ function MsgContextMenu({ msg, mine, pos, onClose, onReply, onCopy, onDelete, on
     { emoji: '😢', label: 'Sad' },
     { emoji: '🙏', label: 'Thanks' },
   ];
+
+  const isMedia = ['image','video','file','audio','voice'].includes(msg.type);
+  const isImage = msg.type === 'image';
+  const hasUrl  = !!msg.attachment?.url;
 
   useEffect(() => {
     const h = e => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
@@ -377,26 +381,54 @@ function MsgContextMenu({ msg, mine, pos, onClose, onReply, onCopy, onDelete, on
         </button>
       </div>
       <div className="msg-ctx-divider"/>
+
       <button className="msg-ctx-item" onClick={() => { onReply(); onClose(); }}>
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
         Reply
       </button>
-      <button className="msg-ctx-item" onClick={() => { onCopy(); onClose(); }}>
-        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-        Copy
-      </button>
+
+      {/* Copy — only for text messages */}
+      {(!isMedia || msg.text) && (
+        <button className="msg-ctx-item" onClick={() => { onCopy(); onClose(); }}>
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy
+        </button>
+      )}
+
+      {/* Open / View — for images */}
+      {isImage && hasUrl && (
+        <button className="msg-ctx-item" onClick={() => { onOpen?.(); onClose(); }}>
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          View photo
+        </button>
+      )}
+
+      {/* Save / Download — for media */}
+      {isMedia && hasUrl && (
+        <button className="msg-ctx-item" onClick={() => { onSave?.(); onClose(); }}>
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Save {msg.type === 'image' ? 'photo' : msg.type === 'video' ? 'video' : 'file'}
+        </button>
+      )}
+
       <button className="msg-ctx-item" onClick={() => { onStar(); onClose(); }}>
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
         Star
       </button>
+
       <button className="msg-ctx-item" onClick={() => {
-        if (navigator.share) navigator.share({ text: msg.text }).catch(() => {});
-        else { navigator.clipboard.writeText(msg.text).catch(() => {}); }
+        const shareText = msg.text || msg.attachment?.name || '';
+        if (navigator.share && (msg.text || msg.attachment?.url)) {
+          navigator.share({ text: shareText, url: msg.attachment?.url }).catch(() => {});
+        } else {
+          navigator.clipboard.writeText(shareText).catch(() => {});
+        }
         onClose();
       }}>
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
         Forward
       </button>
+
       {mine && (
         <>
           <div className="msg-ctx-divider"/>
@@ -421,8 +453,10 @@ function ChatPanel({ mentorship, user, socketRef }) {
   const [isOtherOnline, setIsOtherOnline] = useState(false);
   const bottomRef = useRef();
   const id = mentorship._id;
-  const other = user?.role === 'student' ? mentorship.alumni : mentorship.student;
   const uid = String(user?._id || user?.id || '');
+  const other = String(mentorship.student?._id || mentorship.student) === uid
+    ? mentorship.alumni
+    : mentorship.student;
   const otherId = String(other?._id || '');
 
   useEffect(() => {
@@ -487,7 +521,8 @@ function ChatPanel({ mentorship, user, socketRef }) {
     const fullPayload = replyTo ? { ...payload, replyToId: replyTo._id } : payload;
     const res = await api.post(`/messages/${id}`, fullPayload).catch(() => null);
     if (res) {
-      setMessages(m => [...m, res.data]);
+      // Don't add manually — server emits receive_message to room (including us)
+      // The socket handler deduplicates by _id so no double message
       socketRef?.current?.emit('send_message', { ...res.data, mentorshipId: id });
       setReplyTo(null);
     }
@@ -532,6 +567,17 @@ function ChatPanel({ mentorship, user, socketRef }) {
           onReply={() => setReplyTo(ctxMenu.msg)}
           onCopy={() => navigator.clipboard.writeText(ctxMenu.msg.text || '').catch(() => {})}
           onStar={() => {}}
+          onOpen={() => ctxMenu.msg.attachment?.url && setLightboxSrc(ctxMenu.msg.attachment.url)}
+          onSave={() => {
+            const url = ctxMenu.msg.attachment?.url;
+            const name = ctxMenu.msg.attachment?.name || 'download';
+            if (url) {
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = name;
+              a.click();
+            }
+          }}
           onReact={async (emoji) => {
             const res = await api.put(`/messages/${ctxMenu.msg._id}/react`, { emoji }).catch(() => null);
             if (res) setMessages(prev => prev.map(m => m._id === ctxMenu.msg._id ? { ...m, reactions: res.data.reactions } : m));
@@ -1438,7 +1484,7 @@ function CreateGroupModal({ type, onClose, onCreate }) {
 export default function MessagesInbox() {
   const { id: activeId } = useParams();
   const { user }    = useAuth();
-  const { socketRef } = useSocket();
+  const { socketRef, newMessageEvent } = useSocket();
   const navigate    = useNavigate();
 
   const [tab, setTab]           = useState('chats');
@@ -1450,8 +1496,56 @@ export default function MessagesInbox() {
   const [msgRequests, setMsgRequests] = useState([]);
   const [showRequests, setShowRequests] = useState(false);
   const [following, setFollowing] = useState([]); // users I follow for new chat
+  const [lastMessages, setLastMessages] = useState({}); // { [mentorshipId]: { text, type, senderId, time, isFromMe } }
+  const [unreadCounts, setUnreadCounts] = useState({}); // { [mentorshipId]: number }
 
   const canCreateCommunity = user?.role === 'alumni';
+
+  useEffect(() => {
+    if (!newMessageEvent || newMessageEvent.isGroup) return;
+    const mid = newMessageEvent.mentorshipId || newMessageEvent.mentorship;
+    if (!mid) return;
+    const senderId = String(newMessageEvent.sender?._id || newMessageEvent.sender || '');
+    const myId = String(user?._id || user?.id || '');
+    const isFromMe = senderId === myId;
+    const isActiveChat = activeId === mid;
+
+    setLastMessages(prev => ({
+      ...prev,
+      [mid]: {
+        text: newMessageEvent.type === 'image' ? '📷 Photo'
+            : newMessageEvent.type === 'video' ? '🎥 Video'
+            : newMessageEvent.type === 'voice' ? '🎤 Voice message'
+            : newMessageEvent.type === 'file'  ? '📎 File'
+            : (newMessageEvent.text || ''),
+        type: newMessageEvent.type,
+        senderId,
+        time: newMessageEvent.createdAt || new Date().toISOString(),
+        isFromMe,
+      }
+    }));
+
+    // Increment unread if not from me and not currently viewing this chat
+    if (!isFromMe && !isActiveChat) {
+      setUnreadCounts(prev => ({ ...prev, [mid]: (prev[mid] || 0) + 1 }));
+    }
+
+    // Move this conv to top of list
+    setConvs(prev => {
+      const idx = prev.findIndex(c => c._id === mid);
+      if (idx <= 0) return prev;
+      const updated = [...prev];
+      const [conv] = updated.splice(idx, 1);
+      return [{ ...conv, updatedAt: new Date().toISOString() }, ...updated];
+    });
+  }, [newMessageEvent]);
+
+  // When activeId changes, clear unread for that chat
+  useEffect(() => {
+    if (activeId) {
+      setUnreadCounts(prev => ({ ...prev, [activeId]: 0 }));
+    }
+  }, [activeId]);
 
   useEffect(() => {
     api.get('/mentorship/my').then(r => setConvs(r.data.filter(m => m.status==='accepted'))).catch(()=>{}).finally(()=>setLoading(false));
@@ -1562,14 +1656,37 @@ export default function MessagesInbox() {
                 )}
                 {filteredConvs.map(m => {
                   const p = other(m);
+                  const last = lastMessages[m._id];
+                  const unread = unreadCounts[m._id] || 0;
                   return (
                     <div key={m._id} className={`mc-conv-item${m._id===activeId?' active':''}`} onClick={()=>navigate(`/messages/${m._id}`)}>
-                      <Avatar user={p} size={40} fontSize=".82rem" style={{flexShrink:0}}/>
-                      <div className="mc-conv-info">
-                        <div className="mc-conv-name">{p?.firstName} {p?.lastName}</div>
-                        <div className="mc-conv-sub">{p?.designation||p?.role}{p?.company?` · ${p.company}`:''}</div>
+                      <div style={{ position: 'relative', flexShrink: 0 }}>
+                        <Avatar user={p} size={46} fontSize=".82rem"/>
                       </div>
-                      <div className="mc-conv-time">{fmtTime(m.updatedAt||m.createdAt)}</div>
+                      <div className="mc-conv-info" style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div className="mc-conv-name" style={{ fontWeight: unread > 0 ? 700 : 500 }}>{p?.firstName} {p?.lastName}</div>
+                          <div className="mc-conv-time" style={{ color: unread > 0 ? '#a78bfa' : undefined, fontWeight: unread > 0 ? 600 : 400 }}>
+                            {fmtTime(last?.time || m.updatedAt || m.createdAt)}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div className="mc-conv-sub" style={{
+                            color: unread > 0 ? 'var(--ink)' : undefined,
+                            fontWeight: unread > 0 ? 500 : 400,
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1
+                          }}>
+                            {last ? (last.isFromMe ? `You: ${last.text}` : last.text) : (p?.designation||p?.role)}
+                          </div>
+                          {unread > 0 && (
+                            <span style={{
+                              background: '#a78bfa', color: '#fff', borderRadius: '50%',
+                              minWidth: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: '.7rem', fontWeight: 700, flexShrink: 0, marginLeft: 6, padding: '0 4px'
+                            }}>{unread > 99 ? '99+' : unread}</span>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   );
                 })}

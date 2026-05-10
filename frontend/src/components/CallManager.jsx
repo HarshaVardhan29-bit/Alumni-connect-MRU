@@ -4,7 +4,29 @@ import { useAuth } from '../context/AuthContext';
 import Avatar from './Avatar';
 import api from '../api/axios';
 
-const ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    // Free TURN servers for mobile network relay
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ],
+};
 
 function createRingTone() {
   try {
@@ -138,6 +160,13 @@ export default function CallManager() {
     pc.onconnectionstatechange = () => {
       if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
         cleanup();
+      }
+    };
+    pc.oniceconnectionstatechange = () => {
+      console.log('[WebRTC] ICE state:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') {
+        // Try ICE restart
+        pc.restartIce?.();
       }
     };
     return pc;

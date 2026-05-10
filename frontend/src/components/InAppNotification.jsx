@@ -27,22 +27,32 @@ export default function InAppNotification() {
     // Don't show if it's our own message
     if (senderId === uid) return;
 
-    // Don't show if already on that chat page
+    // Build the chat path for this message
+    const mentorshipId = msg.mentorshipId || msg.mentorship;
+    const groupId = msg.groupId || msg.group?._id || msg.group;
     const chatPath = msg.isGroup
-      ? `/messages/${msg.groupId || msg.group}`
-      : `/messages/${msg.mentorshipId || msg.mentorship}`;
+      ? `/messages/${groupId}`
+      : `/messages/${mentorshipId}`;
 
-    if (location.pathname === chatPath) return;
+    // Don't show if already on that exact chat
+    const currentPath = location.pathname;
+    if (
+      currentPath === chatPath ||
+      currentPath.startsWith(chatPath + '?') ||
+      // Also suppress if on /messages and the active chat matches
+      (currentPath.includes('/messages/') && currentPath.includes(msg.isGroup ? groupId : mentorshipId))
+    ) return;
 
     // Build notification data
     const senderName = msg.sender?.firstName
-      ? `${msg.sender.firstName} ${msg.sender.lastName || ''}`
+      ? `${msg.sender.firstName} ${msg.sender.lastName || ''}`.trim()
       : 'New message';
 
     const preview = msg.type === 'voice' ? '🎤 Voice message'
       : msg.type === 'image' ? '📷 Photo'
       : msg.type === 'video' ? '🎥 Video'
       : msg.type === 'file'  ? '📎 File'
+      : msg.type === 'call'  ? '📞 Call'
       : (msg.text || '').slice(0, 60) || '...';
 
     const groupName = msg.isGroup ? (msg.groupName || 'Group') : null;
@@ -59,6 +69,13 @@ export default function InAppNotification() {
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setNotif(null), 4000);
   }, [newMessageEvent]);
+
+  // Dismiss when user navigates to the chat
+  useEffect(() => {
+    if (notif && location.pathname.includes(notif.chatPath.split('/').pop())) {
+      setNotif(null);
+    }
+  }, [location.pathname]);
 
   if (!notif) return null;
 
