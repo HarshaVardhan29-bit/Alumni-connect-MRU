@@ -1,52 +1,6 @@
 const passport = require('passport');
-const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const User = require('../models/User');
 
-// Only initialize Google strategy if credentials are configured
-if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-  passport.use(
-    new GoogleStrategy(
-      {
-        clientID:     process.env.GOOGLE_CLIENT_ID,
-        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-        callbackURL:  process.env.GOOGLE_CALLBACK_URL || 'http://localhost:5001/api/auth/google/callback',
-      },
-      async (accessToken, refreshToken, profile, done) => {
-        try {
-          const email = profile.emails?.[0]?.value?.toLowerCase();
-          if (!email) return done(new Error('No email from Google'), null);
-
-          let user = await User.findOne({ $or: [{ googleId: profile.id }, { email }] });
-
-          if (user) {
-            if (!user.googleId) {
-              user.googleId = profile.id;
-              if (!user.avatar && profile.photos?.[0]?.value) {
-                user.avatar = profile.photos[0].value;
-              }
-              await user.save({ validateBeforeSave: false });
-            }
-            return done(null, user);
-          }
-
-          const nameParts = profile.displayName?.split(' ') || ['User'];
-          user = await User.create({
-            googleId:  profile.id,
-            firstName: nameParts[0] || 'User',
-            lastName:  nameParts.slice(1).join(' ') || '',
-            email,
-            avatar:    profile.photos?.[0]?.value || '',
-            role:      'student',
-            password:  null,
-          });
-
-          return done(null, user);
-        } catch (err) {
-          return done(err, null);
-        }
-      }
-    )
-  );
-}
+// Google OAuth is handled via Firebase on the frontend.
+// Passport is kept as a placeholder for future strategies.
 
 module.exports = passport;
