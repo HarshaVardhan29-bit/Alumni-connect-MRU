@@ -1444,14 +1444,8 @@ export default function MessagesInbox() {
   useEffect(() => {
     api.get('/mentorship/my').then(r => setConvs(r.data.filter(m => m.status==='accepted'))).catch(()=>{}).finally(()=>setLoading(false));
     api.get('/message-requests/inbox').then(r => setMsgRequests(r.data)).catch(()=>{});
-    // Load following users for new chat search
-    api.get('/users/me').then(r => {
-      const ids = r.data.following || [];
-      if (ids.length > 0) {
-        Promise.all(ids.slice(0, 30).map(id => api.get(`/users/${id}`).then(res => res.data).catch(() => null)))
-          .then(users => setFollowing(users.filter(Boolean)));
-      }
-    }).catch(() => {});
+    // Load ALL users for new chat search (everyone can message anyone)
+    api.get('/users/all').then(r => setFollowing(r.data)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -1485,13 +1479,14 @@ export default function MessagesInbox() {
     return `${p?.firstName} ${p?.lastName}`.toLowerCase().includes(search.toLowerCase());
   });
 
-  // Following users not already in convs — for starting new chats
+  // All users not already in convs — for starting new chats (search required)
   const convUserIds = new Set(convs.map(m => String(other(m)?._id)));
   const filteredFollowing = search.trim()
     ? following.filter(u =>
         !convUserIds.has(String(u._id)) &&
+        String(u._id) !== String(user?._id || user?.id) &&
         `${u.firstName} ${u.lastName}`.toLowerCase().includes(search.toLowerCase())
-      )
+      ).slice(0, 10)
     : [];
 
   const filteredGroups = groups.filter(g => g.name.toLowerCase().includes(search.toLowerCase()));
@@ -1499,6 +1494,17 @@ export default function MessagesInbox() {
   const activeConv  = tab==='chats' ? convs.find(m=>m._id===activeId) : null;
   const activeGroup = tab!=='chats' ? groups.find(g=>g._id===activeId) : null;
   const activeOther = activeConv ? other(activeConv) : null;
+
+  // If activeId is set but not in convs yet (e.g. just created), fetch it
+  useEffect(() => {
+    if (!activeId || tab !== 'chats') return;
+    if (convs.find(m => m._id === activeId)) return; // already loaded
+    api.get(`/mentorship/${activeId}`).then(r => {
+      if (r.data && r.data._id) {
+        setConvs(prev => prev.find(m => m._id === r.data._id) ? prev : [r.data, ...prev]);
+      }
+    }).catch(() => {});
+  }, [activeId, convs.length]);
 
   const TABS = [
     { key:'chats',       label:'Chats',       icon:<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> },

@@ -125,3 +125,16 @@ router.put('/:id/session', protect, async (req, res) => {
 });
 
 module.exports = router;
+
+// GET /api/mentorship/:id — get single mentorship by ID
+router.get('/:id', protect, async (req, res) => {
+  try {
+    const m = await Mentorship.findById(req.params.id)
+      .populate('student', 'firstName lastName email industry careerGoals targetIndustry avatar role designation company')
+      .populate('alumni',  'firstName lastName email industry company designation batch skills bio avatar role');
+    if (!m) return res.status(404).json({ message: 'Not found' });
+    const isParty = [m.student?._id?.toString(), m.alumni?._id?.toString()].includes(req.user._id.toString());
+    if (!isParty) return res.status(403).json({ message: 'Forbidden' });
+    res.json(m);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
