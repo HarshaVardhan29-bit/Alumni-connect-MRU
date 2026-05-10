@@ -1,6 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useSocket } from '../context/SocketContext';
 import Avatar from './Avatar';
 import NotificationBell from './NotificationBell';
 import NotificationPanel from './NotificationPanel';
@@ -82,7 +83,7 @@ function NavItem({ item, location }) {
 }
 
 /* Mobile bottom navigation bar — Twitter/X style */
-function MobileBottomNav({ location, user, onNotifClick, notifOpen }) {
+function MobileBottomNav({ location, user, onNotifClick, notifOpen, unreadMsgs, unreadNotifs }) {
   return (
     <nav className="mobile-bottom-nav">
       {MOBILE_NAV.map(item => {
@@ -96,9 +97,24 @@ function MobileBottomNav({ location, user, onNotifClick, notifOpen }) {
             >
               <span className="mbn-icon">
                 <Icon name="notif" size={26} />
-                {item.badge && <span className="mbn-dot" />}
+                {unreadNotifs > 0 && (
+                  <span className="mbn-dot mbn-badge">{unreadNotifs > 9 ? '9+' : unreadNotifs}</span>
+                )}
               </span>
             </button>
+          );
+        }
+        if (item.path === '/messages') {
+          const isActive = location.pathname.startsWith('/messages');
+          return (
+            <Link key="/messages" to="/messages" className={`mbn-item${isActive ? ' active' : ''}`}>
+              <span className="mbn-icon">
+                <Icon name="messages" size={26} />
+                {unreadMsgs > 0 && (
+                  <span className="mbn-dot mbn-badge">{unreadMsgs > 9 ? '9+' : unreadMsgs}</span>
+                )}
+              </span>
+            </Link>
           );
         }
         if (item.path === '/profile') {
@@ -127,9 +143,57 @@ function MobileBottomNav({ location, user, onNotifClick, notifOpen }) {
 
 export default function DashLayout({ children }) {
   const { user, logout } = useAuth();
+  const { newMessageEvent, newMessageEvent: msgEvt } = useSocket();
   const location = useLocation();
   const navigate = useNavigate();
   const [notifOpen, setNotifOpen] = useState(false);
+  const [unreadMsgs, setUnreadMsgs]   = useState(0); // total unread messages badge
+  const [unreadNotifs, setUnreadNotifs] = useState(0); // unread notifications badge
+
+  const uid = String(user?._id || user?.id || '');
+
+  // Count unread messages from socket events
+  useEffect(() => {
+    if (!msgEvt) return;
+    const senderId = String(msgEvt.sender?._id || msgEvt.sender || '');
+    if (senderId === uid) return; // own message
+    // Don't count if already on messages page for that chat
+    const mid = msgEvt.mentorshipId || msgEvt.mentorship || msgEvt.groupId;
+    const onChat = location.pathname.includes('/messages') &&
+      (location.pathname.includes(mid) || location.pathname === '/messages');
+    if (!onChat) {
+      setUnreadMsgs(c => c + 1);
+    }
+  }, [msgEvt]);
+
+  // Clear message badge when user visits messages
+  useEffect(() => {
+    if (location.pathname.startsWith('/messages')) {
+      setUnreadMsgs(0);
+    }
+    if (location.pathname === '/notifications') {
+      setUnreadNotifs(0);
+    }
+  }, [location.pathname]);
+
+  // Clear notif badge when panel opens
+  useEffect(() => {
+    if (notifOpen) setUnreadNotifs(0);
+  }, [notifOpen]);
+
+  // Listen for new notifications via socket
+  const { socketRef } = useSocket();
+  useEffect(() => {
+    const socket = socketRef?.current;
+    if (!socket) return;
+    const onNotif = () => {
+      if (!notifOpen && location.pathname !== '/notifications') {
+        setUnreadNotifs(c => c + 1);
+      }
+    };
+    socket.on('notification', onNotif);
+    return () => socket.off('notification', onNotif);
+  }, [socketRef?.current, notifOpen, location.pathname]);
 
   return (
     <div className="ig-shell">
@@ -154,10 +218,24 @@ export default function DashLayout({ children }) {
                 >
                   <span className="sb2-icon">
                     <Icon name="notif" />
-                    {item.badge && <span className="sb2-dot" />}
+                    {unreadNotifs > 0 && (
+                      <span className="sb2-dot sb2-badge">{unreadNotifs > 9 ? '9+' : unreadNotifs}</span>
+                    )}
                   </span>
                   <span className="sb2-label">Notifications</span>
                 </button>
+              )
+              : item.path === '/messages'
+              ? (
+                <Link key="/messages" to="/messages" className={`sb2-item${location.pathname.startsWith('/messages') ? ' active' : ''}`}>
+                  <span className="sb2-icon">
+                    <Icon name="messages" />
+                    {unreadMsgs > 0 && (
+                      <span className="sb2-dot sb2-badge">{unreadMsgs > 9 ? '9+' : unreadMsgs}</span>
+                    )}
+                  </span>
+                  <span className="sb2-label">Messages</span>
+                </Link>
               )
               : <NavItem key={item.path} item={item} location={location} />
           )}
@@ -214,6 +292,8 @@ export default function DashLayout({ children }) {
         user={user}
         notifOpen={notifOpen}
         onNotifClick={() => setNotifOpen(o => !o)}
+        unreadMsgs={unreadMsgs}
+        unreadNotifs={unreadNotifs}
       />
     </div>
   );
