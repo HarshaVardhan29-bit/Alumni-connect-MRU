@@ -61,6 +61,9 @@ services:
       # ── Frontend URL (same as this service after deploy) ──
       - key: FRONTEND_URL
         sync: false
+      # ── FCM Web Push VAPID key (baked into frontend build by Vite) ──
+      - key: VITE_FIREBASE_VAPID_KEY
+        value: BM2qa2QGrqsaAkNMEhY0TPZ1MtQdOantkFjQTlA_G9gYAHC5De7dWEdyC_Z4oodwEi3N9BuOj6M_GKeup0Wesdk
       # ── Render service URL (auto-set by Render) ──
       - key: RENDER_EXTERNAL_URL
         sync: false
