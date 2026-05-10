@@ -314,17 +314,9 @@ export default function ProfilePage() {
 
   const handleMessage = async () => {
     try {
-      const res = await api.get('/mentorship');
-      const mentorships = res.data;
-      const existing = mentorships.find(m =>
-        String(m.alumni?._id || m.alumni) === String(id) ||
-        String(m.student?._id || m.student) === String(id)
-      );
-      if (existing) {
-        navigate(`/messages/${existing._id}`);
-      } else {
-        navigate('/messages');
-      }
+      // Create or find a direct message channel with this user
+      const res = await api.post('/mentorship/direct', { userId: id });
+      navigate(`/messages/${res.data._id}`);
     } catch {
       navigate('/messages');
     }

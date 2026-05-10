@@ -1437,12 +1437,21 @@ export default function MessagesInbox() {
   const [showCreate, setShowCreate] = useState(false);
   const [msgRequests, setMsgRequests] = useState([]);
   const [showRequests, setShowRequests] = useState(false);
+  const [following, setFollowing] = useState([]); // users I follow for new chat
 
   const canCreateCommunity = user?.role === 'alumni';
 
   useEffect(() => {
     api.get('/mentorship/my').then(r => setConvs(r.data.filter(m => m.status==='accepted'))).catch(()=>{}).finally(()=>setLoading(false));
     api.get('/message-requests/inbox').then(r => setMsgRequests(r.data)).catch(()=>{});
+    // Load following users for new chat search
+    api.get('/users/me').then(r => {
+      const ids = r.data.following || [];
+      if (ids.length > 0) {
+        Promise.all(ids.slice(0, 30).map(id => api.get(`/users/${id}`).then(res => res.data).catch(() => null)))
+          .then(users => setFollowing(users.filter(Boolean)));
+      }
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -1475,6 +1484,16 @@ export default function MessagesInbox() {
     const p = other(m);
     return `${p?.firstName} ${p?.lastName}`.toLowerCase().includes(search.toLowerCase());
   });
+
+  // Following users not already in convs — for starting new chats
+  const convUserIds = new Set(convs.map(m => String(other(m)?._id)));
+  const filteredFollowing = search.trim()
+    ? following.filter(u =>
+        !convUserIds.has(String(u._id)) &&
+        `${u.firstName} ${u.lastName}`.toLowerCase().includes(search.toLowerCase())
+      )
+    : [];
+
   const filteredGroups = groups.filter(g => g.name.toLowerCase().includes(search.toLowerCase()));
 
   const activeConv  = tab==='chats' ? convs.find(m=>m._id===activeId) : null;
@@ -1519,21 +1538,46 @@ export default function MessagesInbox() {
           <div className="mc-list">
             {loading ? <div className="mc-empty-sm">Loading…</div>
             : tab==='chats' ? (
-              filteredConvs.length===0
-                ? <div className="mc-empty-sm">No conversations yet</div>
-                : filteredConvs.map(m => {
-                    const p = other(m);
-                    return (
-                      <div key={m._id} className={`mc-conv-item${m._id===activeId?' active':''}`} onClick={()=>navigate(`/messages/${m._id}`)}>
-                        <Avatar user={p} size={40} fontSize=".82rem" style={{flexShrink:0}}/>
-                        <div className="mc-conv-info">
-                          <div className="mc-conv-name">{p?.firstName} {p?.lastName}</div>
-                          <div className="mc-conv-sub">{p?.designation||p?.role}{p?.company?` · ${p.company}`:''}</div>
-                        </div>
-                        <div className="mc-conv-time">{fmtTime(m.updatedAt||m.createdAt)}</div>
+              <>
+                {filteredConvs.length === 0 && filteredFollowing.length === 0 && (
+                  <div className="mc-empty-sm">{search ? 'No results' : 'No conversations yet'}</div>
+                )}
+                {filteredConvs.map(m => {
+                  const p = other(m);
+                  return (
+                    <div key={m._id} className={`mc-conv-item${m._id===activeId?' active':''}`} onClick={()=>navigate(`/messages/${m._id}`)}>
+                      <Avatar user={p} size={40} fontSize=".82rem" style={{flexShrink:0}}/>
+                      <div className="mc-conv-info">
+                        <div className="mc-conv-name">{p?.firstName} {p?.lastName}</div>
+                        <div className="mc-conv-sub">{p?.designation||p?.role}{p?.company?` · ${p.company}`:''}</div>
                       </div>
-                    );
-                  })
+                      <div className="mc-conv-time">{fmtTime(m.updatedAt||m.createdAt)}</div>
+                    </div>
+                  );
+                })}
+                {/* Following users — start new chat */}
+                {filteredFollowing.length > 0 && (
+                  <>
+                    <div className="mc-list-label" style={{ marginTop: '.5rem' }}>START NEW CHAT</div>
+                    {filteredFollowing.map(u => (
+                      <div key={u._id} className="mc-conv-item" onClick={async () => {
+                        try {
+                          const res = await api.post('/mentorship/direct', { userId: u._id });
+                          setConvs(prev => prev.find(c => c._id === res.data._id) ? prev : [res.data, ...prev]);
+                          navigate(`/messages/${res.data._id}`);
+                        } catch { navigate('/messages'); }
+                      }}>
+                        <Avatar user={u} size={40} fontSize=".82rem" style={{flexShrink:0}}/>
+                        <div className="mc-conv-info">
+                          <div className="mc-conv-name">{u.firstName} {u.lastName}</div>
+                          <div className="mc-conv-sub">{u.designation||u.role}{u.company?` · ${u.company}`:''}</div>
+                        </div>
+                        <span style={{ fontSize: '.68rem', color: 'var(--muted)', flexShrink: 0 }}>New</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </>
             ) : (
               filteredGroups.length===0
                 ? <div className="mc-empty-sm">No {tab} yet</div>

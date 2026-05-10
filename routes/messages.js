@@ -59,7 +59,9 @@ router.put('/:id/react', protect, async (req, res) => {
 router.post('/:mentorshipId', protect, async (req, res) => {
   try {
     const m = await Mentorship.findById(req.params.mentorshipId);
-    if (!m || m.status !== 'accepted') return res.status(400).json({ message: 'Mentorship not active' });
+    if (!m) return res.status(400).json({ message: 'Conversation not found' });
+    // Allow sending if mentorship is accepted OR it's a direct message channel
+    if (m.status !== 'accepted') return res.status(400).json({ message: 'Mentorship not active' });
     const isParty = [m.student.toString(), m.alumni.toString()].includes(req.user._id.toString());
     if (!isParty) return res.status(403).json({ message: 'Forbidden' });
 

@@ -11,7 +11,55 @@ const emitNotif = async (req, notif) => {
   } catch {}
 };
 
-// POST /api/mentorship/request  — student sends request to alumni
+// POST /api/mentorship/direct — create or find a direct message channel between any two users
+router.post('/direct', protect, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ message: 'userId required' });
+    if (String(userId) === String(req.user._id)) return res.status(400).json({ message: 'Cannot message yourself' });
+
+    const User = require('../models/User');
+    const target = await User.findById(userId);
+    if (!target) return res.status(404).json({ message: 'User not found' });
+
+    // Determine student/alumni roles for the mentorship record
+    // If same role, treat requester as student and target as alumni
+    let studentId, alumniId;
+    if (req.user.role === 'student' && target.role === 'alumni') {
+      studentId = req.user._id; alumniId = target._id;
+    } else if (req.user.role === 'alumni' && target.role === 'student') {
+      studentId = target._id; alumniId = req.user._id;
+    } else {
+      // Same role — requester is "student" side
+      studentId = req.user._id; alumniId = target._id;
+    }
+
+    // Find existing direct channel
+    let m = await Mentorship.findOne({
+      $or: [
+        { student: studentId, alumni: alumniId },
+        { student: alumniId, alumni: studentId },
+      ],
+    });
+
+    if (!m) {
+      // Create a new accepted direct message channel
+      m = await Mentorship.create({
+        student: studentId,
+        alumni: alumniId,
+        status: 'accepted',
+        matchScore: 0,
+        message: 'Direct message',
+        isDirect: true,
+      });
+    } else if (m.status !== 'accepted') {
+      m.status = 'accepted';
+      await m.save();
+    }
+
+    res.json(m);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
 router.post('/request', protect, async (req, res) => {
   try {
     const { alumniId, message, matchScore } = req.body;
