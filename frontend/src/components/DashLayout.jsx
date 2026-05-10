@@ -5,6 +5,8 @@ import Avatar from './Avatar';
 import NotificationBell from './NotificationBell';
 import NotificationPanel from './NotificationPanel';
 import CallManager from './CallManager';
+import InAppNotification from './InAppNotification';
+import '../styles/in-app-notification.css';
 
 const NAV_ITEMS = [
   { path: '/feed',        label: 'Home',          icon: 'home' },
@@ -203,6 +205,7 @@ export default function DashLayout({ children }) {
         <NotificationBell />
         <NotificationPanel open={notifOpen} onClose={() => setNotifOpen(false)} />
         <CallManager />
+        <InAppNotification />
       </main>
 
       {/* ── MOBILE BOTTOM NAV ── */}

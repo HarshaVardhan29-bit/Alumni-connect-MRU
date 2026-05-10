@@ -200,6 +200,13 @@ export default function CallManager() {
       });
       setCallState('calling');
       ringRef.current = createRingTone();
+
+      // ── Send push notification to wake up recipient if their socket is dead ──
+      if (mshipId) {
+        import('../api/axios').then(({ default: api }) => {
+          api.post(`/messages/call-push/${mshipId}`, { callType: type }).catch(() => {});
+        });
+      }
     } catch (err) {
       alert('Could not access microphone/camera. Please allow permissions in your browser.');
       cleanup();

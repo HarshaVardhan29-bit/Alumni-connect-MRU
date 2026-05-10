@@ -20,7 +20,6 @@ router.get('/:mentorshipId', protect, async (req, res) => {
       { read: true }
     );
     if (updated.modifiedCount > 0) {
-      // Tell the sender their messages were read
       req.app.get('io')?.to(req.params.mentorshipId).emit('messages:read', {
         mentorshipId: req.params.mentorshipId,
         readBy: req.user._id,
@@ -61,7 +60,6 @@ router.post('/:mentorshipId', protect, async (req, res) => {
   try {
     const m = await Mentorship.findById(req.params.mentorshipId);
     if (!m) return res.status(400).json({ message: 'Conversation not found' });
-    // Allow sending if mentorship is accepted OR it's a direct message channel
     if (m.status !== 'accepted') return res.status(400).json({ message: 'Mentorship not active' });
     const isParty = [m.student.toString(), m.alumni.toString()].includes(req.user._id.toString());
     if (!isParty) return res.status(403).json({ message: 'Forbidden' });
@@ -77,26 +75,36 @@ router.post('/:mentorshipId', protect, async (req, res) => {
       attachment: attachment || undefined,
     });
     const populated = await msg.populate('sender', 'firstName lastName role avatar');
-    // ── Emit to socket room so other user gets message in real-time ──
+
+    // ── Emit via Socket.IO (works when recipient app is open) ──
     req.app.get('io')?.to(req.params.mentorshipId).emit('receive_message', {
       ...populated.toObject(),
       mentorshipId: req.params.mentorshipId,
     });
-    // ── Push notification to the other party ──
+
+    // ── Push notification (works when recipient app is in background/closed) ──
     const otherId = String(m.student) === String(req.user._id)
       ? String(m.alumni)
       : String(m.student);
+
+    // Always send push — it's the only reliable delivery when socket is dead
     await sendPushToUser(otherId, {
       title: `${req.user.firstName} ${req.user.lastName}`,
-      body:  (text || '').slice(0, 100) || '📎 Attachment',
+      body:  msgType === 'voice' ? '🎤 Voice message'
+           : msgType === 'image' ? '📷 Photo'
+           : msgType === 'video' ? '🎥 Video'
+           : msgType === 'file'  ? '📎 File'
+           : (text || '').slice(0, 100) || '📎 Attachment',
       url:   `/messages/${req.params.mentorshipId}`,
       type:  'message',
+      data:  { mentorshipId: req.params.mentorshipId },
     });
+
     res.status(201).json(populated);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// POST /api/messages/:mentorshipId/call — save call log as system message
+// POST /api/messages/:mentorshipId/call — save call log + push notification for missed calls
 router.post('/:mentorshipId/call', protect, async (req, res) => {
   try {
     const m = await Mentorship.findById(req.params.mentorshipId);
@@ -117,9 +125,51 @@ router.post('/:mentorshipId/call', protect, async (req, res) => {
       callMeta: { callType, status, duration: duration || 0 },
     });
     const populated = await msg.populate('sender', 'firstName lastName role avatar');
-    // emit to room
     req.app.get('io')?.to(req.params.mentorshipId).emit('receive_message', populated);
+
+    // Push notification for missed calls so recipient knows they missed it
+    if (status === 'missed' || status === 'rejected') {
+      const otherId = String(m.student) === String(req.user._id)
+        ? String(m.alumni)
+        : String(m.student);
+      await sendPushToUser(otherId, {
+        title: `Missed ${callType === 'video' ? 'video' : 'voice'} call`,
+        body:  `${req.user.firstName} ${req.user.lastName} called you`,
+        url:   `/messages/${req.params.mentorshipId}`,
+        type:  'call',
+        data:  { mentorshipId: req.params.mentorshipId },
+      });
+    }
+
     res.status(201).json(populated);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// POST /api/messages/call-push — send push to wake up recipient before call connects
+// Called by caller immediately when initiating a call
+router.post('/call-push/:mentorshipId', protect, async (req, res) => {
+  try {
+    const m = await Mentorship.findById(req.params.mentorshipId);
+    if (!m) return res.status(404).json({ message: 'Not found' });
+    const isParty = [m.student.toString(), m.alumni.toString()].includes(req.user._id.toString());
+    if (!isParty) return res.status(403).json({ message: 'Forbidden' });
+
+    const { callType } = req.body;
+    const otherId = String(m.student) === String(req.user._id)
+      ? String(m.alumni)
+      : String(m.student);
+
+    // Send push to wake up the recipient's device so socket can reconnect
+    await sendPushToUser(otherId, {
+      title: `📞 Incoming ${callType === 'video' ? 'video' : 'voice'} call`,
+      body:  `${req.user.firstName} ${req.user.lastName} is calling you`,
+      url:   `/messages/${req.params.mentorshipId}`,
+      type:  'call',
+      requireInteraction: true,
+      data:  { mentorshipId: req.params.mentorshipId, callType, callerId: String(req.user._id) },
+    });
+
+    res.json({ sent: true });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 

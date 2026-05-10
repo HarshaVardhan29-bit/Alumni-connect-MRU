@@ -330,7 +330,11 @@ router.post('/:id/messages', protect, async (req, res) => {
     const populated = await GroupMessage.findById(msg._id)
       .populate('sender', 'firstName lastName role designation company avatar')
       .populate({ path: 'replyTo', populate: { path: 'sender', select: 'firstName lastName avatar' } });
-    req.app.get('io')?.to(`group_${req.params.id}`).emit('receive_group_message', populated);
+    req.app.get('io')?.to(`group_${req.params.id}`).emit('receive_group_message', {
+      ...populated.toObject(),
+      groupId: req.params.id,
+      groupName: group.name,
+    });
     await Group.findByIdAndUpdate(req.params.id, { updatedAt: new Date() });
     
     // ── Push notification to all group members except sender ──

@@ -77,7 +77,8 @@ export function SocketProvider({ children }) {
 
     // ── Real-time group message events ──
     socket.on('receive_group_message', (data) => {
-      setNewMessageEvent({ ...data, isGroup: true, timestamp: Date.now() });
+      // Attach group info so InAppNotification can use it
+      setNewMessageEvent({ ...data, isGroup: true, groupId: data.group?._id || data.group, groupName: data.groupName, timestamp: Date.now() });
       if (String(data.sender?._id || data.sender) !== String(uid)) {
         try {
           MESSAGE_SOUND.play().catch(() => {});

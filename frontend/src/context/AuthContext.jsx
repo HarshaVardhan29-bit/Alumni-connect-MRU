@@ -29,11 +29,9 @@ export function AuthProvider({ children }) {
       try {
         const parsed = JSON.parse(stored);
         if (!Array.isArray(parsed.savedPosts)) parsed.savedPosts = [];
-        // Set user IMMEDIATELY from cache — no loading delay
         setUser(parsed);
-        setLoading(false); // ← unblock routing right away
+        setLoading(false);
 
-        // Refresh in background silently
         const apiBase = import.meta.env.VITE_API_URL === '/api'
           ? '/api'
           : (import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5001') + '/api';
@@ -49,7 +47,6 @@ export function AuthProvider({ children }) {
               });
             }
             if (r.status === 401) {
-              // Token expired — log out
               localStorage.removeItem('token');
               localStorage.removeItem('user');
               setUser(null);
@@ -70,13 +67,27 @@ export function AuthProvider({ children }) {
               localStorage.setItem('savedPosts', JSON.stringify(updated.savedPosts));
             }
           })
-          .catch(() => {}); // silent fail — user stays logged in from cache
+          .catch(() => {});
+
+        // Re-subscribe to push when already logged in (e.g. app restart, new device)
+        setTimeout(() => subscribeToPush(), 3000);
       } catch {
         setLoading(false);
       }
     } else {
       setLoading(false);
     }
+  }, []);
+
+  // Re-subscribe to push when user returns to the app from background
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && localStorage.getItem('token')) {
+        subscribeToPush();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, []);
 
   const register = async (data) => {
@@ -92,8 +103,9 @@ export function AuthProvider({ children }) {
     localStorage.setItem('token', res.data.token);
     localStorage.setItem('user', JSON.stringify(res.data.user));
     setUser(res.data.user);
-    // Subscribe to push notifications after login
-    setTimeout(() => subscribeToPush(), 2000);
+    // Subscribe to push notifications after login — with retry
+    setTimeout(() => subscribeToPush(), 1500);
+    setTimeout(() => subscribeToPush(), 8000); // retry in case SW wasn't ready
     return res.data;
   };
 
@@ -123,6 +135,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem('user', JSON.stringify(updatedUser));
     setUser(updatedUser);
     setPendingGoogle(null);
+    setTimeout(() => subscribeToPush(), 2000);
   };
 
   const logout = () => {

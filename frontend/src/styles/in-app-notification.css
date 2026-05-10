@@ -1,0 +1,96 @@
+/* ── In-App Notification Banner ── */
+.in-app-notif {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface-2, #1a1a2e);
+  border: 1px solid rgba(124, 69, 184, 0.35);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(124,69,184,.1);
+  cursor: pointer;
+  max-width: min(380px, calc(100vw - 32px));
+  width: 100%;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  animation: notifSlideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.in-app-notif:hover {
+  border-color: rgba(124, 69, 184, 0.6);
+  transform: translateX(-50%) translateY(-2px);
+}
+
+@keyframes notifSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-24px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+
+.in-app-notif-avatar {
+  flex-shrink: 0;
+}
+
+.in-app-notif-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.in-app-notif-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--ink, #f0eeff);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.in-app-notif-preview {
+  font-size: 0.8rem;
+  color: var(--muted, #8b8fa8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.in-app-notif-close {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted, #8b8fa8);
+  cursor: pointer;
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.in-app-notif-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: var(--ink, #f0eeff);
+}
+
+/* Mobile: full width at bottom of screen */
+@media (max-width: 600px) {
+  .in-app-notif {
+    top: auto;
+    bottom: 80px; /* above mobile bottom nav */
+    border-radius: 14px;
+  }
+}
