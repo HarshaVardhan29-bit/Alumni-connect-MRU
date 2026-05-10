@@ -9,6 +9,7 @@ const rateLimit = require('express-rate-limit');
 const compression = require('compression');
 require('dotenv').config();
 require('./utils/passport'); // initialize passport strategies
+const { startKeepAlive } = require('./utils/keepAlive');
 
 const app = express();
 const server = http.createServer(app);
@@ -91,6 +92,9 @@ app.use('/api/news',          require('./routes/news'));
 app.use('/api/groups',        require('./routes/groups'));
 app.use('/api/message-requests', require('./routes/messageRequests'));
 app.use('/api/admin',         require('./routes/admin'));
+
+// ── Health check — used by keep-alive ping ───────────────────────
+app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 
 // ── Image proxy (avoids CORS/403 on external logos) ─────────────
 app.get('/api/proxy-image', async (req, res) => {
@@ -281,8 +285,9 @@ io.on('connection', (socket) => {
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {
     console.log('MongoDB connected');
-    server.listen(process.env.PORT, () =>
-      console.log(`Server running on port ${process.env.PORT}`)
-    );
+    server.listen(process.env.PORT, () => {
+      console.log(`Server running on port ${process.env.PORT}`);
+      startKeepAlive(); // prevent Render free tier sleep
+    });
   })
   .catch(err => console.error('DB error:', err));

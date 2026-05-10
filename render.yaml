@@ -61,3 +61,6 @@ services:
       # ── Frontend URL (same as this service after deploy) ──
       - key: FRONTEND_URL
         sync: false
+      # ── Render service URL (auto-set by Render) ──
+      - key: RENDER_EXTERNAL_URL
+        sync: false
