@@ -116,11 +116,17 @@ if (isProd) {
       }
     },
   }));
-  // All non-API routes → React app (SPA fallback)
+  // SPA fallback — only for actual page routes, not assets or Firebase
   app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api') && !req.path.startsWith('/socket.io')) {
-      res.sendFile(path.join(frontendDist, 'index.html'));
-    }
+    const p = req.path;
+    if (
+      p.startsWith('/api') ||
+      p.startsWith('/socket.io') ||
+      p.startsWith('/__/') ||          // Firebase auth handler
+      p.startsWith('/assets/') ||      // JS/CSS chunks
+      p.match(/\.(js|css|png|jpg|jpeg|svg|ico|webp|woff|woff2|ttf|map|gz|br)$/)
+    ) return;
+    res.sendFile(path.join(frontendDist, 'index.html'));
   });
 } else {
   app.get('/', (req, res) => res.json({ message: 'AlumniAI API running' }));
