@@ -1531,6 +1531,17 @@ export default function MessagesInbox() {
 
   const canCreateCommunity = user?.role === 'alumni';
 
+  // Re-join all rooms when socket reconnects (handles page refresh / reconnect)
+  useEffect(() => {
+    const socket = socketRef?.current;
+    if (!socket || convs.length === 0) return;
+    const rejoin = () => convs.forEach(m => socket.emit('join_room', m._id));
+    socket.on('connect', rejoin);
+    // Join immediately if already connected
+    if (socket.connected) rejoin();
+    return () => socket.off('connect', rejoin);
+  }, [socketRef?.current, convs.length]);
+
   useEffect(() => {
     if (!newMessageEvent || newMessageEvent.isGroup) return;
     const mid = newMessageEvent.mentorshipId || newMessageEvent.mentorship;
@@ -1568,11 +1579,13 @@ export default function MessagesInbox() {
         api.get(`/mentorship/${mid}`).then(r => {
           if (r.data?._id) {
             setConvs(p => p.find(c => c._id === r.data._id) ? p : [r.data, ...p]);
+            // Also join the room for this new conversation
+            socketRef?.current?.emit('join_room', r.data._id);
           }
         }).catch(() => {});
         return prev;
       }
-      if (idx === 0) return prev;
+      // Always move to top (even if idx === 0, updatedAt needs refreshing)
       const updated = [...prev];
       const [conv] = updated.splice(idx, 1);
       return [{ ...conv, updatedAt: new Date().toISOString() }, ...updated];
@@ -1587,9 +1600,17 @@ export default function MessagesInbox() {
   }, [activeId]);
 
   useEffect(() => {
-    api.get('/mentorship/my').then(r => setConvs(r.data.filter(m => m.status==='accepted'))).catch(()=>{}).finally(()=>setLoading(false));
-    api.get('/message-requests/inbox').then(r => setMsgRequests(r.data)).catch(()=>{});
-    // Load ALL users for new chat search (everyone can message anyone)
+    api.get('/mentorship/my').then(r => {
+      const accepted = r.data.filter(m => m.status === 'accepted');
+      setConvs(accepted);
+      // Join all conversation rooms so we receive real-time messages
+      // for ALL chats, not just the currently open one
+      const socket = socketRef?.current;
+      if (socket) {
+        accepted.forEach(m => socket.emit('join_room', m._id));
+      }
+    }).catch(() => {}).finally(() => setLoading(false));
+    api.get('/message-requests/inbox').then(r => setMsgRequests(r.data)).catch(() => {});
     api.get('/users/all').then(r => setFollowing(r.data)).catch(() => {});
   }, []);
 
