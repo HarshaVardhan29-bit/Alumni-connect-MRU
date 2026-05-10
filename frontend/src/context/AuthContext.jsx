@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import { signInWithPopup } from 'firebase/auth';
+import { signInWithPopup, signInWithRedirect, getRedirectResult } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
 import api from '../api/axios';
 import SuspendedScreen from '../components/SuspendedScreen';
@@ -84,27 +84,56 @@ export function AuthProvider({ children }) {
   };
 
   /**
-   * Google Sign-In via Firebase popup.
-   * If isNewUser=true → set pendingGoogle state (triggers modal in LoginPage/AuthPage)
-   * If existing user → log in directly
+   * Google Sign-In — uses redirect on production (avoids COOP popup issues),
+   * popup on localhost for better dev experience.
    */
   const googleLogin = async () => {
-    const result   = await signInWithPopup(auth, googleProvider);
-    const idToken  = await result.user.getIdToken();
-    const res      = await api.post('/auth/firebase/google', { idToken });
+    const isLocalhost = window.location.hostname === 'localhost' ||
+                        window.location.hostname === '127.0.0.1';
 
-    if (res.data.isNewUser) {
-      // New user — hold token + user, show role modal
-      setPendingGoogle({ token: res.data.token, user: res.data.user });
-      return { isNewUser: true };
+    if (isLocalhost) {
+      // Popup works fine on localhost
+      const result  = await signInWithPopup(auth, googleProvider);
+      const idToken = await result.user.getIdToken();
+      const res     = await api.post('/auth/firebase/google', { idToken });
+
+      if (res.data.isNewUser) {
+        setPendingGoogle({ token: res.data.token, user: res.data.user });
+        return { isNewUser: true };
+      } else {
+        localStorage.setItem('token', res.data.token);
+        localStorage.setItem('user', JSON.stringify(res.data.user));
+        setUser(res.data.user);
+        return res.data;
+      }
     } else {
-      // Existing user — log in directly
-      localStorage.setItem('token', res.data.token);
-      localStorage.setItem('user', JSON.stringify(res.data.user));
-      setUser(res.data.user);
-      return res.data;
+      // Production — use redirect to avoid COOP issues
+      await signInWithRedirect(auth, googleProvider);
+      // Page will reload — result handled in useEffect below
+      return { isNewUser: false };
     }
   };
+
+  // Handle redirect result after Google sign-in redirect
+  useEffect(() => {
+    getRedirectResult(auth).then(async (result) => {
+      if (!result) return;
+      try {
+        const idToken = await result.user.getIdToken();
+        const res     = await api.post('/auth/firebase/google', { idToken });
+        if (res.data.isNewUser) {
+          setPendingGoogle({ token: res.data.token, user: res.data.user });
+        } else {
+          localStorage.setItem('token', res.data.token);
+          localStorage.setItem('user', JSON.stringify(res.data.user));
+          setUser(res.data.user);
+          window.location.href = '/feed';
+        }
+      } catch (err) {
+        console.error('Google redirect login failed:', err);
+      }
+    }).catch(() => {});
+  }, []);
 
   /**
    * Called by GoogleRoleModal after user picks a role.
