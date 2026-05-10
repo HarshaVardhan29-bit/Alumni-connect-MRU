@@ -454,7 +454,7 @@ function MsgContextMenu({ msg, mine, pos, onClose, onReply, onCopy, onDelete, on
 /* ── 1-on-1 Chat Panel — Production Grade ── */
 function ChatPanel({ mentorship, user, socketRef }) {
   const navigate = useNavigate();
-  const { newMessageEvent, msgStatusEvent, msgAckEvent, markSeen, sendTyping, checkOnline } = useSocket();
+  const { newMessageEvent, msgStatusEvent, msgAckEvent, markSeen, checkOnline } = useSocket();
 
   const [messages,      setMessages]      = useState([]);
   const [loading,       setLoading]       = useState(true);
@@ -465,9 +465,10 @@ function ChatPanel({ mentorship, user, socketRef }) {
   const [replyTo,       setReplyTo]       = useState(null);
   const [isOtherOnline, setIsOtherOnline] = useState(false);
 
-  const bottomRef    = useRef();
-  const topRef       = useRef();
-  const oldestMsgRef = useRef(null); // for cursor pagination
+  const bottomRef      = useRef();
+  const oldestMsgRef   = useRef(null);  // ID of oldest loaded message (for load-more cursor)
+  const loadingRef     = useRef(true);  // tracks loading without stale closure
+  const messagesRef    = useRef([]);    // tracks messages without stale closure in socket handlers
 
   const id  = mentorship._id;
   const uid = String(user?._id || user?.id || '');
@@ -475,23 +476,63 @@ function ChatPanel({ mentorship, user, socketRef }) {
     ? mentorship.alumni : mentorship.student;
   const otherId = String(other?._id || '');
 
+  // Keep messagesRef in sync
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // ── Safe merge utility — deduplicates and sorts chronologically ──
+  // NEVER mutates input arrays
+  const mergeMessages = (existing, incoming) => {
+    const map = new Map();
+    // Add existing first
+    for (const m of existing) {
+      const key = m.clientMsgId || String(m._id);
+      map.set(key, m);
+    }
+    // Incoming overwrites (has real _id, server data)
+    for (const m of incoming) {
+      const key = m.clientMsgId || String(m._id);
+      const existing = map.get(key);
+      // Prefer server version (has real _id) over optimistic
+      if (!existing || existing.status === 'pending') {
+        map.set(key, m);
+      }
+    }
+    // Sort chronologically: oldest first, newest last
+    return [...map.values()].sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime();
+      const tb = new Date(b.createdAt).getTime();
+      if (ta !== tb) return ta - tb;
+      return String(a._id) < String(b._id) ? -1 : 1;
+    });
+  };
+
   // ── Initial load — most recent 30 messages ──
   useEffect(() => {
     setLoading(true);
+    loadingRef.current = true;
     setMessages([]);
+    messagesRef.current = [];
     oldestMsgRef.current = null;
 
     api.get(`/messages/${id}?limit=30`)
       .then(r => {
-        const msgs = r.data.messages || r.data || [];
+        // API always returns chronological order (oldest first, newest last)
+        const msgs = r.data.messages || (Array.isArray(r.data) ? r.data : []);
         setMessages(msgs);
+        messagesRef.current = msgs;
         setHasMore(r.data.hasMore || false);
+        // oldestMsgRef = first message in array (oldest)
         if (msgs.length > 0) oldestMsgRef.current = msgs[0]._id;
-        // Mark as seen
         api.post(`/messages/${id}/seen`).catch(() => {});
       })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+      .catch(err => {
+        console.error('[ChatPanel] Initial load failed:', err.message);
+        // Do NOT corrupt state on error — keep empty array
+      })
+      .finally(() => {
+        setLoading(false);
+        loadingRef.current = false;
+      });
   }, [id]);
 
   // ── Load older messages (infinite scroll up) ──
@@ -500,13 +541,23 @@ function ChatPanel({ mentorship, user, socketRef }) {
     setLoadingMore(true);
     try {
       const r = await api.get(`/messages/${id}?before=${oldestMsgRef.current}&limit=30`);
-      const older = r.data.messages || r.data || [];
+      const older = r.data.messages || (Array.isArray(r.data) ? r.data : []);
       if (older.length > 0) {
-        setMessages(prev => [...older, ...prev]);
+        // Prepend older messages — they are already in chronological order from API
+        setMessages(prev => {
+          const merged = mergeMessages(older, prev);
+          return merged;
+        });
+        // Update oldest cursor to the first message in the older batch
         oldestMsgRef.current = older[0]._id;
         setHasMore(r.data.hasMore || false);
+      } else {
+        setHasMore(false);
       }
-    } catch {}
+    } catch (err) {
+      console.error('[ChatPanel] Load more failed:', err.message);
+      // Do NOT corrupt state on error
+    }
     setLoadingMore(false);
   };
 
@@ -524,34 +575,41 @@ function ChatPanel({ mentorship, user, socketRef }) {
   }, [otherId, socketRef?.current]);
 
   // ── Reconnect sync — fetch missed messages ──
+  // Uses ref to avoid stale closure — does NOT depend on messages.length
   useEffect(() => {
     const socket = socketRef?.current;
     if (!socket) return;
     const onConnect = () => {
-      if (messages.length === 0) return;
-      const lastId = messages[messages.length - 1]?._id;
-      if (!lastId) return;
+      if (loadingRef.current) return; // still loading initial batch
+      const current = messagesRef.current;
+      if (current.length === 0) return;
+      // Get the newest message ID (last in chronological array)
+      const lastMsg = current[current.length - 1];
+      const lastId = lastMsg?._id;
+      if (!lastId || String(lastId).length < 10) return; // skip temp clientMsgIds
       api.get(`/messages/${id}?after=${lastId}&limit=50`)
         .then(r => {
-          const missed = r.data.messages || r.data || [];
+          const missed = r.data.messages || (Array.isArray(r.data) ? r.data : []);
           if (missed.length > 0) {
-            setMessages(prev => {
-              const existingIds = new Set(prev.map(m => String(m._id)));
-              const newOnes = missed.filter(m => !existingIds.has(String(m._id)));
-              return [...prev, ...newOnes];
-            });
+            setMessages(prev => mergeMessages(prev, missed));
           }
-        }).catch(() => {});
+        })
+        .catch(err => {
+          console.error('[ChatPanel] Reconnect sync failed:', err.message);
+          // Do NOT corrupt state
+        });
     };
     socket.on('connect', onConnect);
     return () => socket.off('connect', onConnect);
-  }, [id, messages.length, socketRef?.current]);
+    // Only re-register when socket or id changes — NOT on messages change
+  }, [id, socketRef?.current]);
 
   // ── Incoming messages from socket ──
   useEffect(() => {
     if (!newMessageEvent) return;
     const convId = newMessageEvent.conversationId || newMessageEvent.mentorshipId || newMessageEvent.mentorship;
     if (String(convId) !== String(id)) return;
+
     if (newMessageEvent.deleted) {
       setMessages(prev => prev.map(m =>
         String(m._id) === String(newMessageEvent.messageId)
@@ -560,8 +618,9 @@ function ChatPanel({ mentorship, user, socketRef }) {
       ));
       return;
     }
+
+    // Append new message — always at the end (newest last)
     setMessages(prev => {
-      // Deduplicate by _id and clientMsgId
       const exists = prev.find(m =>
         String(m._id) === String(newMessageEvent._id) ||
         (newMessageEvent.clientMsgId && m.clientMsgId === newMessageEvent.clientMsgId)
@@ -569,7 +628,8 @@ function ChatPanel({ mentorship, user, socketRef }) {
       if (exists) return prev;
       return [...prev, newMessageEvent];
     });
-    // Mark as seen if we're the recipient and chat is open
+
+    // Mark as seen if we're the recipient
     const senderId = String(newMessageEvent.sender?._id || newMessageEvent.sender || '');
     if (senderId !== uid) {
       api.post(`/messages/${id}/seen`).catch(() => {});
@@ -577,7 +637,7 @@ function ChatPanel({ mentorship, user, socketRef }) {
     }
   }, [newMessageEvent]);
 
-  // ── Message status updates (delivered/seen) ──
+  // ── Message status updates ──
   useEffect(() => {
     if (!msgStatusEvent) return;
     if (String(msgStatusEvent.conversationId) !== String(id)) return;
@@ -604,7 +664,7 @@ function ChatPanel({ mentorship, user, socketRef }) {
     }
   }, [msgStatusEvent]);
 
-  // ── Sent ACK — update optimistic message with real _id ──
+  // ── Sent ACK — replace optimistic message with server version ──
   useEffect(() => {
     if (!msgAckEvent) return;
     if (String(msgAckEvent.conversationId) !== String(id)) return;
@@ -615,11 +675,12 @@ function ChatPanel({ mentorship, user, socketRef }) {
     ));
   }, [msgAckEvent]);
 
-  // ── Scroll to bottom ──
+  // ── Scroll to bottom on new messages ──
   useEffect(() => {
     if (messages.length > 0) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length]);
 
+  // ── Scroll to bottom instantly on initial load ──
   useEffect(() => {
     if (!loading && messages.length > 0) {
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'auto' }), 50);
@@ -629,15 +690,11 @@ function ChatPanel({ mentorship, user, socketRef }) {
   // ── Send message with optimistic UI ──
   const handleSend = async (payload) => {
     const clientMsgId = `${uid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const fullPayload = {
-      ...payload,
-      replyToId: replyTo?._id,
-      clientMsgId,
-    };
+    const fullPayload = { ...payload, replyToId: replyTo?._id, clientMsgId };
 
-    // Optimistic append
+    // Optimistic append — always at end
     const optimistic = {
-      _id:            clientMsgId, // temp ID
+      _id:            clientMsgId,
       clientMsgId,
       conversationId: id,
       sender:         user,
@@ -654,9 +711,8 @@ function ChatPanel({ mentorship, user, socketRef }) {
 
     try {
       await api.post(`/messages/${id}`, fullPayload);
-      // ACK comes via socket msg:ack event — updates status to 'sent'
+      // ACK comes via socket msg:ack — replaces optimistic with real message
     } catch {
-      // Mark as failed
       setMessages(prev => prev.map(m =>
         m.clientMsgId === clientMsgId ? { ...m, status: 'failed' } : m
       ));
@@ -678,7 +734,7 @@ function ChatPanel({ mentorship, user, socketRef }) {
         m.clientMsgId === msg.clientMsgId ? { ...m, status: 'failed' } : m
       ));
     }
-  };
+  };  };
 
   const handleCtx = (e, msg, mine) => {
     e.preventDefault(); e.stopPropagation();

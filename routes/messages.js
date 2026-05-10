@@ -1,27 +1,44 @@
 /**
  * Messages API — Production Grade
  * 
- * Message lifecycle: pending → sent → delivered → seen
- * Unread counts maintained server-side
- * Pagination: cursor-based (before/after messageId)
- * No base64 — URLs only
+ * ORDERING GUARANTEE: All responses return messages in chronological order
+ * (oldest first, newest last) — same as WhatsApp/Telegram.
+ * 
+ * Pagination:
+ *   ?before=<messageId>  → load older messages (prepend to top)
+ *   ?after=<messageId>   → load newer messages (reconnect sync)
+ *   No params            → load most recent N messages
+ * 
+ * CRITICAL: sort({ createdAt: 1, _id: 1 }) is the ONLY sort used.
+ * For "before" queries we fetch DESC then reverse in JS (safe copy).
  */
 
 const router      = require('express').Router();
 const Message     = require('../models/Message');
 const Mentorship  = require('../models/Mentorship');
+const mongoose    = require('mongoose');
 const { protect } = require('../middleware/auth');
 const { sendPushToUser } = require('../utils/pushNotification');
 const { isUserOnline }   = require('../utils/socketManager');
 
 const PAGE_SIZE = 30;
 
+// ── Safe ObjectId validation ──────────────────────────────────────
+function isValidObjectId(id) {
+  return id && mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === String(id);
+}
+
 // ── Helper: verify conversation access ───────────────────────────
 async function getConversation(convId, userId) {
-  const conv = await Mentorship.findById(convId);
-  if (!conv) return null;
-  const isParty = [conv.student.toString(), conv.alumni.toString()].includes(userId.toString());
-  return isParty ? conv : null;
+  if (!isValidObjectId(convId)) return null;
+  try {
+    const conv = await Mentorship.findById(convId);
+    if (!conv) return null;
+    const isParty = [conv.student.toString(), conv.alumni.toString()].includes(userId.toString());
+    return isParty ? conv : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Helper: get other participant ────────────────────────────────
@@ -44,76 +61,173 @@ function msgPreview(msg) {
   }
 }
 
-// ── GET /api/messages/:convId — paginated messages ───────────────
-// Supports: ?before=<messageId>  (load older)
-//           ?after=<messageId>   (load newer / sync after reconnect)
-//           ?limit=30
+// ── Base query: supports both old 'mentorship' and new 'conversationId' fields ──
+function baseQuery(convId, userId) {
+  return {
+    $or: [
+      { conversationId: convId },
+      { mentorship: convId },
+    ],
+    deletedFor: { $ne: userId },
+  };
+}
+
+// ── GET /api/messages/:convId ─────────────────────────────────────
+// Returns messages in CHRONOLOGICAL ORDER (oldest → newest)
+// ?before=<msgId>  load older messages (for infinite scroll up)
+// ?after=<msgId>   load newer messages (for reconnect sync)
+// ?limit=N
 router.get('/:convId', protect, async (req, res) => {
   try {
-    const conv = await getConversation(req.params.convId, req.user._id);
-    if (!conv) return res.status(403).json({ message: 'Forbidden' });
+    const { convId } = req.params;
 
-    const limit  = Math.min(parseInt(req.query.limit) || PAGE_SIZE, 100);
-    const before = req.query.before; // messageId — load older messages
-    const after  = req.query.after;  // messageId — load newer messages (reconnect sync)
-
-    let query = {
-      // Support both old 'mentorship' field and new 'conversationId' field
-      $or: [
-        { conversationId: req.params.convId },
-        { mentorship: req.params.convId },
-      ],
-      deletedFor: { $ne: req.user._id },
-    };
-
-    let sort = { createdAt: -1 };
-
-    if (before) {
-      const pivot = await Message.findById(before).select('createdAt').lean();
-      if (pivot) query.createdAt = { $lt: pivot.createdAt };
-    } else if (after) {
-      const pivot = await Message.findById(after).select('createdAt').lean();
-      if (pivot) { query.createdAt = { $gt: pivot.createdAt }; sort = { createdAt: 1 }; }
+    // Validate convId
+    if (!isValidObjectId(convId)) {
+      return res.status(400).json({ message: 'Invalid conversation ID', messages: [], hasMore: false, nextCursor: null });
     }
 
-    const messages = await Message.find(query)
-      .sort(sort)
+    const conv = await getConversation(convId, req.user._id);
+    if (!conv) {
+      return res.status(403).json({ message: 'Forbidden', messages: [], hasMore: false, nextCursor: null });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit) || PAGE_SIZE, 100);
+    const before = req.query.before; // load messages OLDER than this ID
+    const after  = req.query.after;  // load messages NEWER than this ID
+
+    const query = baseQuery(convId, req.user._id);
+
+    if (before) {
+      // Validate cursor
+      if (!isValidObjectId(before)) {
+        console.warn(`[Messages] Invalid 'before' cursor: ${before}`);
+        // Return empty rather than crash
+        return res.json({ messages: [], hasMore: false, nextCursor: null });
+      }
+      const pivot = await Message.findById(before).select('createdAt _id').lean();
+      if (!pivot) {
+        console.warn(`[Messages] 'before' cursor not found: ${before}`);
+        return res.json({ messages: [], hasMore: false, nextCursor: null });
+      }
+      // Fetch messages older than pivot — sort DESC to get the N most recent ones before pivot
+      // then reverse to get chronological order
+      query.$and = [
+        { $or: query.$or },
+        {
+          $or: [
+            { createdAt: { $lt: pivot.createdAt } },
+            { createdAt: pivot.createdAt, _id: { $lt: pivot._id } },
+          ]
+        }
+      ];
+      delete query.$or;
+
+      const msgs = await Message.find(query)
+        .sort({ createdAt: -1, _id: -1 }) // DESC to get N most recent before pivot
+        .limit(limit)
+        .populate('sender', 'firstName lastName role avatar')
+        .populate({ path: 'replyTo', select: 'text type sender', populate: { path: 'sender', select: 'firstName lastName' } })
+        .lean();
+
+      // Reverse to chronological order (oldest first) — safe copy, no mutation
+      const chronological = [...msgs].reverse();
+
+      return res.json({
+        messages:   chronological,
+        hasMore:    msgs.length === limit,
+        nextCursor: chronological.length > 0 ? chronological[0]._id : null, // oldest in batch
+      });
+    }
+
+    if (after) {
+      // Validate cursor
+      if (!isValidObjectId(after)) {
+        console.warn(`[Messages] Invalid 'after' cursor: ${after}`);
+        return res.json({ messages: [], hasMore: false, nextCursor: null });
+      }
+      const pivot = await Message.findById(after).select('createdAt _id').lean();
+      if (!pivot) {
+        console.warn(`[Messages] 'after' cursor not found: ${after}`);
+        return res.json({ messages: [], hasMore: false, nextCursor: null });
+      }
+      // Fetch messages newer than pivot — already in chronological order
+      query.$and = [
+        { $or: query.$or },
+        {
+          $or: [
+            { createdAt: { $gt: pivot.createdAt } },
+            { createdAt: pivot.createdAt, _id: { $gt: pivot._id } },
+          ]
+        }
+      ];
+      delete query.$or;
+
+      const msgs = await Message.find(query)
+        .sort({ createdAt: 1, _id: 1 }) // ASC — chronological
+        .limit(limit)
+        .populate('sender', 'firstName lastName role avatar')
+        .populate({ path: 'replyTo', select: 'text type sender', populate: { path: 'sender', select: 'firstName lastName' } })
+        .lean();
+
+      return res.json({
+        messages:   msgs,
+        hasMore:    msgs.length === limit,
+        nextCursor: msgs.length > 0 ? msgs[msgs.length - 1]._id : null,
+      });
+    }
+
+    // ── No cursor: load most recent N messages in chronological order ──
+    const msgs = await Message.find(query)
+      .sort({ createdAt: -1, _id: -1 }) // DESC to get most recent
       .limit(limit)
       .populate('sender', 'firstName lastName role avatar')
       .populate({ path: 'replyTo', select: 'text type sender', populate: { path: 'sender', select: 'firstName lastName' } })
       .lean();
 
-    // Return in chronological order
-    const ordered = before ? messages.reverse() : messages;
+    // Reverse to chronological (oldest first, newest last) — safe copy
+    const chronological = [...msgs].reverse();
 
-    // Mark as delivered (not seen — seen happens when user opens chat)
-    await Message.updateMany(
-      { conversationId: req.params.convId, sender: { $ne: req.user._id }, status: 'sent' },
-      { status: 'delivered' }
-    );
+    // Mark as delivered
+    const convQuery = {
+      $or: [
+        { conversationId: convId },
+        { mentorship: convId },
+      ],
+      sender: { $ne: req.user._id },
+      status: 'sent',
+    };
+    await Message.updateMany(convQuery, { status: 'delivered' }).catch(() => {});
 
-    // Emit delivery status to sender
+    // Notify sender of delivery
     const otherId = getOtherId(conv, req.user._id);
     const io = req.app.get('io');
-    if (io && ordered.length > 0) {
+    if (io && chronological.length > 0) {
       io.to(`user_${otherId}`).emit('msg:status', {
-        conversationId: req.params.convId,
+        conversationId: convId,
         status: 'delivered',
         deliveredTo: req.user._id,
       });
     }
 
-    res.json({
-      messages: ordered,
-      hasMore: messages.length === limit,
-      nextCursor: ordered.length > 0 ? ordered[0]._id : null,
+    return res.json({
+      messages:   chronological,
+      hasMore:    msgs.length === limit,
+      nextCursor: chronological.length > 0 ? chronological[0]._id : null, // oldest msg ID for "load more"
     });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+
+  } catch (err) {
+    console.error('[Messages GET] Error:', err.message, err.stack);
+    return res.status(500).json({ message: 'Server error', messages: [], hasMore: false, nextCursor: null });
+  }
 });
 
 // ── POST /api/messages/:convId — send message ────────────────────
 router.post('/:convId', protect, async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.convId)) {
+      return res.status(400).json({ message: 'Invalid conversation ID' });
+    }
+
     const conv = await getConversation(req.params.convId, req.user._id);
     if (!conv) return res.status(403).json({ message: 'Forbidden' });
     if (conv.status !== 'accepted') return res.status(400).json({ message: 'Conversation not active' });
@@ -122,7 +236,8 @@ router.post('/:convId', protect, async (req, res) => {
 
     // Deduplication — if clientMsgId already exists, return existing message
     if (clientMsgId) {
-      const existing = await Message.findOne({ clientMsgId }).populate('sender', 'firstName lastName role avatar').lean();
+      const existing = await Message.findOne({ clientMsgId })
+        .populate('sender', 'firstName lastName role avatar').lean();
       if (existing) return res.status(200).json(existing);
     }
 
@@ -132,7 +247,7 @@ router.post('/:convId', protect, async (req, res) => {
       text:           text || '',
       type:           type || 'text',
       attachment:     attachment || undefined,
-      replyTo:        replyToId || null,
+      replyTo:        replyToId && isValidObjectId(replyToId) ? replyToId : null,
       clientMsgId:    clientMsgId || undefined,
       status:         'sent',
     });
@@ -145,7 +260,7 @@ router.post('/:convId', protect, async (req, res) => {
     const otherId = getOtherId(conv, req.user._id);
     const io = req.app.get('io');
 
-    // ── Update conversation sidebar state ──
+    // Update conversation sidebar state
     await Mentorship.findByIdAndUpdate(req.params.convId, {
       lastMessage: {
         _id:       msg._id,
@@ -155,11 +270,9 @@ router.post('/:convId', protect, async (req, res) => {
         createdAt: msg.createdAt,
       },
       updatedAt: new Date(),
-      // Increment unread for recipient only
       [`unreadCounts.${otherId}`]: (conv.unreadCounts?.get(otherId) || 0) + 1,
     });
 
-    // ── Emit to recipient via their user room ──
     const recipientOnline = isUserOnline(otherId);
 
     if (io) {
@@ -169,7 +282,7 @@ router.post('/:convId', protect, async (req, res) => {
         conversationId: req.params.convId,
       });
 
-      // Send ACK back to sender (status: sent)
+      // ACK to sender
       io.to(`user_${req.user._id}`).emit('msg:ack', {
         clientMsgId,
         messageId:      msg._id,
@@ -178,7 +291,7 @@ router.post('/:convId', protect, async (req, res) => {
         createdAt:      msg.createdAt,
       });
 
-      // Sidebar update for both users
+      // Sidebar update
       const sidebarUpdate = {
         conversationId: req.params.convId,
         lastMessage: {
@@ -200,7 +313,7 @@ router.post('/:convId', protect, async (req, res) => {
       });
     }
 
-    // ── Push notification — ONLY if recipient is offline ──
+    // Push only if offline
     if (!recipientOnline) {
       await sendPushToUser(otherId, {
         title: `${req.user.firstName} ${req.user.lastName}`,
@@ -214,41 +327,47 @@ router.post('/:convId', protect, async (req, res) => {
     res.status(201).json(populated);
   } catch (err) {
     if (err.code === 11000) {
-      // Duplicate clientMsgId — return existing
-      const existing = await Message.findOne({ clientMsgId: req.body.clientMsgId })
-        .populate('sender', 'firstName lastName role avatar').lean();
-      return res.status(200).json(existing);
+      // Duplicate clientMsgId
+      try {
+        const existing = await Message.findOne({ clientMsgId: req.body.clientMsgId })
+          .populate('sender', 'firstName lastName role avatar').lean();
+        if (existing) return res.status(200).json(existing);
+      } catch {}
     }
-    res.status(500).json({ message: err.message });
+    console.error('[Messages POST] Error:', err.message);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
-// ── POST /api/messages/:convId/seen — mark messages as seen ──────
+// ── POST /api/messages/:convId/seen ──────────────────────────────
 router.post('/:convId/seen', protect, async (req, res) => {
   try {
-    const conv = await getConversation(req.params.convId, req.user._id);
-    if (!conv) return res.status(403).json({ message: 'Forbidden' });
+    if (!isValidObjectId(req.params.convId)) {
+      return res.json({ ok: true, updated: 0 });
+    }
 
-    // Update message statuses
+    const conv = await getConversation(req.params.convId, req.user._id);
+    if (!conv) return res.json({ ok: true, updated: 0 });
+
     const result = await Message.updateMany(
       {
-        conversationId: req.params.convId,
+        $or: [
+          { conversationId: req.params.convId },
+          { mentorship: req.params.convId },
+        ],
         sender: { $ne: req.user._id },
         status: { $in: ['sent', 'delivered'] },
       },
       { status: 'seen' }
     );
 
-    // Reset unread count for this user
     await Mentorship.findByIdAndUpdate(req.params.convId, {
       [`unreadCounts.${req.user._id}`]: 0,
     });
 
-    // Notify sender of seen status
     if (result.modifiedCount > 0) {
       const otherId = getOtherId(conv, req.user._id);
-      const io = req.app.get('io');
-      io?.to(`user_${otherId}`).emit('msg:status', {
+      req.app.get('io')?.to(`user_${otherId}`).emit('msg:status', {
         conversationId: req.params.convId,
         status: 'seen',
         seenBy: req.user._id,
@@ -256,18 +375,25 @@ router.post('/:convId/seen', protect, async (req, res) => {
     }
 
     res.json({ ok: true, updated: result.modifiedCount });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) {
+    console.error('[Messages SEEN] Error:', err.message);
+    res.json({ ok: true, updated: 0 }); // never crash on seen
+  }
 });
 
-// ── POST /api/messages/:convId/read — legacy alias for seen ──────
-router.post('/:convId/read', protect, async (req, res) => {
+// ── POST /api/messages/:convId/read — legacy alias ───────────────
+router.post('/:convId/read', protect, (req, res, next) => {
   req.url = `/${req.params.convId}/seen`;
-  return router.handle(req, res, () => {});
+  next();
 });
 
-// ── PUT /api/messages/:msgId/react — add/toggle reaction ─────────
+// ── PUT /api/messages/:msgId/react ───────────────────────────────
 router.put('/:msgId/react', protect, async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.msgId)) {
+      return res.status(400).json({ message: 'Invalid message ID' });
+    }
+
     const { emoji } = req.body;
     const msg = await Message.findById(req.params.msgId);
     if (!msg) return res.status(404).json({ message: 'Not found' });
@@ -284,25 +410,31 @@ router.put('/:msgId/react', protect, async (req, res) => {
     }
     await msg.save();
 
-    const io = req.app.get('io');
-    // Get conversation to find other participant
-    const conv = await Mentorship.findById(msg.conversationId);
-    if (conv && io) {
+    const convId = msg.conversationId || msg.mentorship;
+    const conv = convId ? await Mentorship.findById(convId) : null;
+    if (conv) {
       const otherId = getOtherId(conv, req.user._id);
-      io.to(`user_${otherId}`).emit('msg:reaction', {
+      req.app.get('io')?.to(`user_${otherId}`).emit('msg:reaction', {
         messageId:      msg._id,
-        conversationId: msg.conversationId,
+        conversationId: String(convId),
         reactions:      msg.reactions,
       });
     }
 
     res.json({ reactions: msg.reactions });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) {
+    console.error('[Messages REACT] Error:', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
 });
 
-// ── DELETE /api/messages/:msgId — delete message ─────────────────
+// ── DELETE /api/messages/:msgId ───────────────────────────────────
 router.delete('/:msgId', protect, async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.msgId)) {
+      return res.status(400).json({ message: 'Invalid message ID' });
+    }
+
     const msg = await Message.findById(req.params.msgId);
     if (!msg) return res.status(404).json({ message: 'Not found' });
 
@@ -310,23 +442,21 @@ router.delete('/:msgId', protect, async (req, res) => {
     const { forEveryone } = req.query;
 
     if (isOwn && forEveryone === 'true') {
-      // Delete for everyone
       msg.deletedAt = new Date();
       msg.text = '';
       msg.attachment = undefined;
       await msg.save();
 
-      const io = req.app.get('io');
-      const conv = await Mentorship.findById(msg.conversationId);
-      if (conv && io) {
+      const convId = msg.conversationId || msg.mentorship;
+      const conv = convId ? await Mentorship.findById(convId) : null;
+      if (conv) {
         const otherId = getOtherId(conv, req.user._id);
-        io.to(`user_${otherId}`).emit('msg:deleted', {
+        req.app.get('io')?.to(`user_${otherId}`).emit('msg:deleted', {
           messageId:      msg._id,
-          conversationId: msg.conversationId,
+          conversationId: String(convId),
         });
       }
     } else {
-      // Delete for me only
       if (!msg.deletedFor.includes(req.user._id)) {
         msg.deletedFor.push(req.user._id);
         await msg.save();
@@ -334,12 +464,19 @@ router.delete('/:msgId', protect, async (req, res) => {
     }
 
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) {
+    console.error('[Messages DELETE] Error:', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
 });
 
-// ── POST /api/messages/:convId/call — save call log ──────────────
+// ── POST /api/messages/:convId/call ──────────────────────────────
 router.post('/:convId/call', protect, async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.convId)) {
+      return res.status(400).json({ message: 'Invalid conversation ID' });
+    }
+
     const conv = await getConversation(req.params.convId, req.user._id);
     if (!conv) return res.status(404).json({ message: 'Not found' });
 
@@ -361,14 +498,12 @@ router.post('/:convId/call', protect, async (req, res) => {
 
     const populated = await msg.populate('sender', 'firstName lastName role avatar');
     const otherId = getOtherId(conv, req.user._id);
-    const io = req.app.get('io');
 
-    io?.to(`user_${otherId}`).emit('receive_message', {
+    req.app.get('io')?.to(`user_${otherId}`).emit('receive_message', {
       ...populated.toObject(),
       conversationId: req.params.convId,
     });
 
-    // Push for missed calls
     if (isMissed) {
       await sendPushToUser(otherId, {
         title: `Missed ${callType === 'video' ? 'video' : 'voice'} call`,
@@ -380,19 +515,25 @@ router.post('/:convId/call', protect, async (req, res) => {
     }
 
     res.status(201).json(populated);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) {
+    console.error('[Messages CALL] Error:', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
 });
 
-// ── POST /api/messages/call-push/:convId — wake up recipient ─────
+// ── POST /api/messages/call-push/:convId ─────────────────────────
 router.post('/call-push/:convId', protect, async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.convId)) {
+      return res.json({ sent: false });
+    }
+
     const conv = await getConversation(req.params.convId, req.user._id);
-    if (!conv) return res.status(404).json({ message: 'Not found' });
+    if (!conv) return res.json({ sent: false });
 
     const { callType } = req.body;
     const otherId = getOtherId(conv, req.user._id);
 
-    // Only send push if recipient is offline
     if (!isUserOnline(otherId)) {
       await sendPushToUser(otherId, {
         title: `📞 Incoming ${callType === 'video' ? 'video' : 'voice'} call`,
@@ -405,7 +546,10 @@ router.post('/call-push/:convId', protect, async (req, res) => {
     }
 
     res.json({ sent: !isUserOnline(otherId) });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) {
+    console.error('[Messages CALL-PUSH] Error:', err.message);
+    res.json({ sent: false });
+  }
 });
 
 function fmtDuration(s) {
