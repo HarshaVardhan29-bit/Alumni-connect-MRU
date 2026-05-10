@@ -50,8 +50,14 @@ self.addEventListener('fetch', (event) => {
   // Skip API calls (always fetch fresh)
   if (url.pathname.startsWith('/api/')) return;
 
+  // Skip socket.io
+  if (url.pathname.startsWith('/socket.io')) return;
+
+  // Skip cross-origin requests (Firebase, Google, etc.)
+  if (url.origin !== self.location.origin) return;
+
   // Network-first strategy for HTML
-  if (request.headers.get('accept').includes('text/html')) {
+  if (request.headers.get('accept') && request.headers.get('accept').includes('text/html')) {
     event.respondWith(
       fetch(request)
         .then((response) => {
