@@ -105,15 +105,12 @@ app.get('/api/proxy-image', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => res.json({ message: 'AlumniAI API running' }));
-
 // ── Serve React frontend in production ──────────────────────────
 if (isProd) {
   const frontendDist = path.join(__dirname, 'frontend', 'dist');
   app.use(express.static(frontendDist, {
     maxAge: '1y',
     etag: true,
-    // Don't cache index.html so new deploys are picked up immediately
     setHeaders: (res, filePath) => {
       if (filePath.endsWith('index.html')) {
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -126,6 +123,8 @@ if (isProd) {
       res.sendFile(path.join(frontendDist, 'index.html'));
     }
   });
+} else {
+  app.get('/', (req, res) => res.json({ message: 'AlumniAI API running' }));
 }
 
 // Socket.io — real-time chat + notifications + WebRTC signaling
