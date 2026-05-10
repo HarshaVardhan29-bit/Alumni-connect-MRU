@@ -734,7 +734,7 @@ function ChatPanel({ mentorship, user, socketRef }) {
         m.clientMsgId === msg.clientMsgId ? { ...m, status: 'failed' } : m
       ));
     }
-  };  };
+  };
 
   const handleCtx = (e, msg, mine) => {
     e.preventDefault(); e.stopPropagation();
@@ -755,20 +755,6 @@ function ChatPanel({ mentorship, user, socketRef }) {
   };
 
   const grouped = messages.reduce((acc, msg) => {
-    const day = new Date(msg.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-    if (!acc[day]) acc[day] = [];
-    acc[day].push(msg);
-    return acc;
-  }, {});
-  const handleCtx2 = (e, msg, mine) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const x = Math.min(e.clientX, window.innerWidth - 220);
-    const y = Math.min(e.clientY, window.innerHeight - 320);
-    setCtxMenu({ msg, mine, x, y });
-  };
-
-  const grouped2 = messages.reduce((acc, msg) => {
     const day = new Date(msg.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
     if (!acc[day]) acc[day] = [];
     acc[day].push(msg);

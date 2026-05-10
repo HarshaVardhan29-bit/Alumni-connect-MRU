@@ -82,8 +82,9 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html {
   scroll-behavior: smooth;
-  /* Use dynamic viewport height on mobile to account for browser chrome */
   height: 100%;
+  /* Prevent horizontal scroll */
+  overflow-x: hidden;
 }
 body {
   font-family: 'DM Sans', sans-serif;
@@ -94,16 +95,21 @@ body {
   /* Prevent text size adjustment on orientation change */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
-  /* Smooth momentum scrolling on iOS */
+  /* Momentum scrolling on iOS — critical for smooth feel */
   -webkit-overflow-scrolling: touch;
-  /* Prevent pull-to-refresh interfering with our own */
+  /* Allow vertical pan — instant first-touch response */
+  touch-action: pan-y;
+  /* Prevent pull-to-refresh interfering */
   overscroll-behavior-y: contain;
   height: 100%;
+  /* Prevent layout shift from scrollbar appearing */
+  scrollbar-gutter: stable;
 }
 
-/* Improve tap targets on mobile */
+/* Improve tap targets on mobile — no 300ms delay */
 button, a, [role="button"] {
   -webkit-tap-highlight-color: transparent;
+  /* manipulation = no double-tap zoom = instant tap response */
   touch-action: manipulation;
 }
 
@@ -273,8 +279,8 @@ button, a, [role="button"] {
    MOBILE GLOBAL UTILITIES
    ═══════════════════════════════════════════════════════════════ */
 
-/* Smooth scrolling for all scrollable containers on mobile */
 @media (max-width: 768px) {
+  /* Touch optimizations for all scrollable containers */
   .ig-main,
   .mc-body,
   .mc-list,
@@ -285,10 +291,13 @@ button, a, [role="button"] {
   .settings-submenu,
   .settings-content {
     -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
     scroll-behavior: smooth;
+    /* Prevent scroll chaining */
+    overscroll-behavior-y: contain;
   }
 
-  /* Larger tap targets for all interactive elements */
+  /* Larger tap targets — 44px minimum (Apple HIG) */
   .xpost-act,
   .post-act,
   .compose-tool,
@@ -303,6 +312,13 @@ button, a, [role="button"] {
   .ig-main > * {
     max-width: 100vw;
     overflow-x: hidden;
+  }
+
+  /* Post images: lazy load + no layout shift */
+  .xpost-media-img,
+  .mc-img {
+    content-visibility: auto;
+    contain-intrinsic-size: 0 200px;
   }
 
   /* Modal overlays: full screen on mobile */

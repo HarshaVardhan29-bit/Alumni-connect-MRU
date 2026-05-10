@@ -1,18 +1,21 @@
 /* ===== FEED PAGE — Dark theme matching landing page ===== */
 .feed-wrap {
   display: grid; grid-template-columns: 1fr 280px; gap: 0;
-  min-height: 100vh; background: var(--bg);
+  min-height: 100dvh; background: var(--bg);
 }
 .feed-col {
   display: flex; flex-direction: column; min-width: 0;
   padding: 2rem 1.8rem 2rem 2.2rem;
   border-right: 1px solid rgba(201,168,76,.1);
   background: var(--bg);
+  /* Smooth touch scrolling */
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
 }
 .feed-sidebar-col {
   display: flex; flex-direction: column;
   padding: 2rem 1.4rem;
-  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  position: sticky; top: 0; height: 100dvh; overflow-y: auto;
   background: var(--bg);
 }
 
@@ -201,16 +204,23 @@
 
 /* ═══════════════════════════════════════════════════════════════
    MOBILE FEED  ≤ 768px
+   
+   KEY: feed-wrap and feed-col must NOT have overflow:hidden
+   or fixed heights. Let the parent ig-main handle scrolling.
    ═══════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
   .feed-wrap {
     grid-template-columns: 1fr;
+    /* Natural height — no min-height that forces scroll container */
     min-height: unset;
   }
 
   .feed-col {
     padding: 0;
     border-right: none;
+    /* Touch optimizations */
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
   }
 
   .feed-sidebar-col { display: none; }

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
@@ -91,8 +91,8 @@ function ShareMenu({ postId, onClose }) {
   );
 }
 
-/* ── Main PostCard ── */
-export default function PostCard({ post, onDelete, onReply }) {
+/* ── Main PostCard — memo prevents re-render during scroll ── */
+function PostCard({ post, onDelete, onReply }) {
   const { user, updateUser } = useAuth();
   const { postLikeEvent, postRetweetEvent } = useSocket();
   const navigate = useNavigate();
@@ -331,3 +331,19 @@ export default function PostCard({ post, onDelete, onReply }) {
     </>
   );
 }
+
+// memo: only re-render when post data or callbacks change
+// This prevents the entire feed from re-rendering during scroll
+export default memo(PostCard, (prev, next) => {
+  return (
+    prev.post._id === next.post._id &&
+    prev.post.likesCount === next.post.likesCount &&
+    prev.post.retweetsCount === next.post.retweetsCount &&
+    prev.post.repliesCount === next.post.repliesCount &&
+    prev.post.liked === next.post.liked &&
+    prev.post.retweeted === next.post.retweeted &&
+    prev.post.bookmarked === next.post.bookmarked &&
+    prev.onDelete === next.onDelete &&
+    prev.onReply === next.onReply
+  );
+});

@@ -191,14 +191,20 @@ export default function FeedPage() {
   };
 
   // ── Intersection Observer for infinite scroll ──
+  // rootMargin: preload 300px before reaching bottom (smooth experience)
+  // threshold: 0 = trigger as soon as 1px is visible
   useEffect(() => {
+    if (!loaderRef.current) return;
     const observer = new IntersectionObserver(
-      entries => { if (entries[0].isIntersecting) loadMore(); },
-      { threshold: 0.1 }
+      (entries) => {
+        if (entries[0].isIntersecting) loadMore();
+      },
+      { threshold: 0, rootMargin: '0px 0px 300px 0px' }
     );
-    if (loaderRef.current) observer.observe(loaderRef.current);
+    observer.observe(loaderRef.current);
     return () => observer.disconnect();
-  }, [tab, cursors, hasMore, loadingMore]);
+    // Only re-create observer when tab/cursor/hasMore changes — NOT on every render
+  }, [tab, cursors[tab], hasMore[tab]]);
 
   const activePosts = tab === 'for-you' ? allPosts : tab === 'following' ? followingPosts : trendingPosts;
   const isLoading   = loading || tabLoading;
