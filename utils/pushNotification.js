@@ -1,73 +1,100 @@
-const webpush = require('web-push');
-const User = require('../models/User');
+const admin = require('firebase-admin');
+const User  = require('../models/User');
 
-// Configure VAPID
-if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
-  webpush.setVapidDetails(
-    process.env.VAPID_EMAIL || 'mailto:admin@mru.edu.in',
-    process.env.VAPID_PUBLIC_KEY,
-    process.env.VAPID_PRIVATE_KEY
-  );
+// ── Initialize Firebase Admin (reuse if already initialized) ──────
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId:   process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey:  process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    }),
+  });
 }
 
 /**
- * Send a push notification to a user
- * @param {string} userId - recipient user ID
+ * Send a push notification to a single user via FCM.
+ * @param {string} userId  - MongoDB user _id
  * @param {object} payload - { title, body, url, icon, type, data }
  */
 async function sendPushToUser(userId, payload) {
-  if (!process.env.VAPID_PUBLIC_KEY) return;
+  if (!process.env.FIREBASE_PROJECT_ID) return;
 
   try {
-    const user = await User.findById(userId).select('pushSubscriptions notificationSettings');
-    if (!user || !user.pushSubscriptions?.length) return;
+    const user = await User.findById(userId).select('fcmTokens notificationSettings');
+    if (!user || !user.fcmTokens?.length) return;
 
-    // Check user notification preferences
+    // Respect user notification preferences
     const prefs = user.notificationSettings || {};
-    if (payload.type === 'like'     && prefs.likes     === false) return;
-    if (payload.type === 'comment'  && prefs.comments  === false) return;
-    if (payload.type === 'follow'   && prefs.follows   === false) return;
-    if (payload.type === 'message'  && prefs.messages  === false) return;
+    if (payload.type === 'like'    && prefs.likes    === false) return;
+    if (payload.type === 'comment' && prefs.comments === false) return;
+    if (payload.type === 'follow'  && prefs.follows  === false) return;
+    if (payload.type === 'message' && prefs.messages === false) return;
 
-    const notification = JSON.stringify({
-      title: payload.title || 'MRU Connect',
-      body:  payload.body  || '',
-      icon:  payload.icon  || '/favicon.svg',
-      badge: '/favicon.svg',
-      url:   payload.url   || '/',
-      tag:   payload.type  || 'general',
-      renotify: true,
-      requireInteraction: payload.type === 'message' || payload.type === 'call', // Keep message/call notifs visible
-      vibrate: payload.type === 'message' ? [200, 100, 200] : [100, 50, 100],
-      data: payload.data || {},
-      timestamp: Date.now(),
+    const message = {
+      notification: {
+        title: payload.title || 'MRU Connect',
+        body:  payload.body  || '',
+      },
+      webpush: {
+        notification: {
+          icon:  payload.icon  || '/favicon.svg',
+          badge: '/favicon.svg',
+          requireInteraction: payload.type === 'message' || payload.type === 'call',
+          vibrate: payload.type === 'message' ? [200, 100, 200] : [100, 50, 100],
+          tag:     payload.type || 'general',
+          renotify: true,
+          timestamp: Date.now(),
+        },
+        fcmOptions: {
+          link: payload.url || '/',
+        },
+      },
+      data: {
+        url:  payload.url  || '/',
+        type: payload.type || 'general',
+        ...(payload.data ? Object.fromEntries(
+          Object.entries(payload.data).map(([k, v]) => [k, String(v)])
+        ) : {}),
+      },
+      tokens: user.fcmTokens, // multicast to all devices
+    };
+
+    const response = await admin.messaging().sendEachForMulticast(message);
+
+    // Remove invalid/expired tokens
+    const invalidTokens = [];
+    response.responses.forEach((resp, idx) => {
+      if (!resp.success) {
+        const code = resp.error?.code;
+        if (
+          code === 'messaging/registration-token-not-registered' ||
+          code === 'messaging/invalid-registration-token' ||
+          code === 'messaging/invalid-argument'
+        ) {
+          invalidTokens.push(user.fcmTokens[idx]);
+        }
+      }
     });
 
-    // Send to all subscribed devices
-    const sendPromises = user.pushSubscriptions.map(sub =>
-      webpush.sendNotification(sub, notification).catch(async err => {
-        // Remove invalid/expired subscriptions
-        if (err.statusCode === 410 || err.statusCode === 404) {
-          await User.findByIdAndUpdate(userId, {
-            $pull: { pushSubscriptions: { endpoint: sub.endpoint } }
-          });
-        }
-      })
-    );
+    if (invalidTokens.length > 0) {
+      await User.findByIdAndUpdate(userId, {
+        $pull: { fcmTokens: { $in: invalidTokens } },
+      });
+    }
 
-    await Promise.allSettled(sendPromises);
   } catch (err) {
-    console.error('[Push] Error sending notification:', err.message);
+    console.error('[FCM] Error sending notification:', err.message);
   }
 }
 
 /**
- * Send push notification to multiple users
- * @param {string[]} userIds - array of recipient user IDs
- * @param {object} payload - notification payload
+ * Send push notification to multiple users.
+ * @param {string[]} userIds
+ * @param {object}   payload
  */
 async function sendPushToUsers(userIds, payload) {
-  await Promise.all(userIds.map(userId => sendPushToUser(userId, payload)));
+  await Promise.all(userIds.map(id => sendPushToUser(id, payload)));
 }
 
 module.exports = { sendPushToUser, sendPushToUsers };

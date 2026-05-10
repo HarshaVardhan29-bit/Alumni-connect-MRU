@@ -64,7 +64,9 @@ const userSchema = new mongoose.Schema(
     phone: { type: String, default: '' },
     username: { type: String, default: '' },
     deactivatedAt: { type: Date, default: null },
-    // Web Push subscriptions (one per device)
+    // FCM tokens — one per device, used for push notifications
+    fcmTokens: [{ type: String }],
+    // Legacy Web Push subscriptions (kept for migration, no longer used)
     pushSubscriptions: [{
       endpoint:  { type: String },
       expirationTime: { type: Number, default: null },

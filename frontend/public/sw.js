@@ -1,14 +1,13 @@
 // ═══════════════════════════════════════════════════════════════
-// MRU MentorConnect — Service Worker v7
+// MRU MentorConnect — Service Worker v8
 // Strategy: Cache-first for assets, Network-first for pages/API
-// Features: Offline support, Push notifications, Background sync
+// Features: Offline support, FCM Push notifications, Background sync
 // ═══════════════════════════════════════════════════════════════
-const CACHE_VERSION = 'v7';
+const CACHE_VERSION = 'v8';
 const STATIC_CACHE  = `mru-static-${CACHE_VERSION}`;
 const DYNAMIC_CACHE = `mru-dynamic-${CACHE_VERSION}`;
 const IMAGE_CACHE   = `mru-images-${CACHE_VERSION}`;
 
-// Core shell — cache on install
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -43,10 +42,8 @@ self.addEventListener('fetch', (e) => {
   const { request } = e;
   const url = new URL(request.url);
 
-  // Only handle GET
   if (request.method !== 'GET') return;
 
-  // Skip: API, socket.io, Firebase, cross-origin
   if (
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/socket.io') ||
@@ -54,7 +51,7 @@ self.addEventListener('fetch', (e) => {
     url.origin !== self.location.origin
   ) return;
 
-  // ── Images: cache-first, long TTL ──
+  // Images: cache-first
   if (/\.(png|jpg|jpeg|webp|gif|svg|ico)$/.test(url.pathname)) {
     e.respondWith(
       caches.open(IMAGE_CACHE).then(async cache => {
@@ -72,7 +69,7 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // ── JS/CSS assets (hashed filenames): cache-first ──
+  // JS/CSS assets: cache-first
   if (/\/assets\//.test(url.pathname)) {
     e.respondWith(
       caches.open(STATIC_CACHE).then(async cache => {
@@ -90,14 +87,12 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // ── HTML pages: network-first, fallback to cache ──
-  // IMPORTANT: clone BEFORE consuming the response body
+  // HTML pages: network-first
   if (request.headers.get('accept')?.includes('text/html')) {
     e.respondWith(
       fetch(request)
         .then(res => {
           if (res.ok) {
-            // Clone FIRST, then cache the clone — original goes to browser
             const toCache = res.clone();
             caches.open(DYNAMIC_CACHE).then(c => c.put(request, toCache));
           }
@@ -108,15 +103,12 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // ── Everything else: stale-while-revalidate ──
+  // Everything else: stale-while-revalidate
   e.respondWith(
     caches.open(DYNAMIC_CACHE).then(async cache => {
       const cached = await cache.match(request);
       const fetchPromise = fetch(request).then(res => {
-        if (res.ok) {
-          // Clone FIRST before caching
-          cache.put(request, res.clone());
-        }
+        if (res.ok) cache.put(request, res.clone());
         return res;
       }).catch(() => cached);
       return cached || fetchPromise;
@@ -124,31 +116,35 @@ self.addEventListener('fetch', (e) => {
   );
 });
 
-// ── Push notifications ───────────────────────────────────────────
+// ── FCM Background Push notifications ───────────────────────────
+// Firebase SDK injects its own push handler via importScripts.
+// We handle the 'push' event as fallback for non-FCM pushes.
 self.addEventListener('push', (e) => {
   if (!e.data) return;
-  
   try {
     const data = e.data.json();
+    // FCM sends notification in data.notification or top-level
+    const title = data.notification?.title || data.title || 'MRU Connect';
+    const body  = data.notification?.body  || data.body  || '';
+    const url   = data.fcmOptions?.link || data.data?.url || data.url || '/';
+    const type  = data.data?.type || 'general';
+
     const options = {
-      body: data.body || '',
-      icon: data.icon || '/favicon.svg',
-      badge: data.badge || '/favicon.svg',
-      data: { url: data.url || '/', ...data.data },
-      vibrate: data.vibrate || [100, 50, 100],
-      tag: data.tag || 'general',
-      renotify: data.renotify !== false,
-      requireInteraction: data.requireInteraction || false,
-      timestamp: data.timestamp || Date.now(),
-      actions: data.type === 'message' ? [
-        { action: 'reply', title: 'Reply', icon: '/favicon.svg' },
+      body,
+      icon:  '/favicon.svg',
+      badge: '/favicon.svg',
+      data:  { url, ...data.data },
+      vibrate: type === 'message' ? [200, 100, 200] : [100, 50, 100],
+      tag:     type,
+      renotify: true,
+      requireInteraction: type === 'message' || type === 'call',
+      timestamp: Date.now(),
+      actions: type === 'message' ? [
         { action: 'view', title: 'View', icon: '/favicon.svg' },
       ] : [],
     };
 
-    e.waitUntil(
-      self.registration.showNotification(data.title || 'MRU Connect', options)
-    );
+    e.waitUntil(self.registration.showNotification(title, options));
   } catch (err) {
     console.error('[SW] Push error:', err);
   }
@@ -157,22 +153,21 @@ self.addEventListener('push', (e) => {
 // ── Notification click ───────────────────────────────────────────
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  
   const url = e.notification.data?.url || '/';
-  
+
   e.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true })
       .then(clientList => {
-        // Focus existing window if available
+        // Focus existing window if open
         for (const client of clientList) {
-          if (client.url.includes(url.split('?')[0]) && 'focus' in client) {
-            return client.focus();
+          if ('focus' in client) {
+            client.focus();
+            client.navigate(url);
+            return;
           }
         }
         // Open new window
-        if (clients.openWindow) {
-          return clients.openWindow(url);
-        }
+        if (clients.openWindow) return clients.openWindow(url);
       })
   );
 });
@@ -190,7 +185,6 @@ async function syncOfflineMessages() {
     const tx = db.transaction('pendingMessages', 'readonly');
     const store = tx.objectStore('pendingMessages');
     const messages = await getAllFromStore(store);
-    
     for (const msg of messages) {
       try {
         const response = await fetch(msg.url, {
@@ -198,7 +192,6 @@ async function syncOfflineMessages() {
           headers: { 'Content-Type': 'application/json', ...msg.headers },
           body: JSON.stringify(msg.data),
         });
-        
         if (response.ok) {
           const deleteTx = db.transaction('pendingMessages', 'readwrite');
           deleteTx.objectStore('pendingMessages').delete(msg.id);
@@ -214,216 +207,6 @@ function getAllFromStore(store) {
     req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => reject(req.error);
   });
-}
-
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('MRUConnect', 1);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-    request.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains('pendingMessages')) {
-        db.createObjectStore('pendingMessages', { keyPath: 'id', autoIncrement: true });
-      }
-    };
-  });
-}
-const STATIC_CACHE  = `mru-static-${CACHE_VERSION}`;
-const DYNAMIC_CACHE = `mru-dynamic-${CACHE_VERSION}`;
-const IMAGE_CACHE   = `mru-images-${CACHE_VERSION}`;
-
-// Core shell — cache on install
-const PRECACHE_ASSETS = [
-  '/',
-  '/index.html',
-  '/favicon.svg',
-  '/manifest.json',
-];
-
-// ── Install ──────────────────────────────────────────────────────
-self.addEventListener('install', (e) => {
-  e.waitUntil(
-    caches.open(STATIC_CACHE)
-      .then(c => c.addAll(PRECACHE_ASSETS))
-      .then(() => self.skipWaiting())
-  );
-});
-
-// ── Activate — purge old caches ──────────────────────────────────
-self.addEventListener('activate', (e) => {
-  e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(
-        keys
-          .filter(k => ![STATIC_CACHE, DYNAMIC_CACHE, IMAGE_CACHE].includes(k))
-          .map(k => caches.delete(k))
-      )
-    ).then(() => self.clients.claim())
-  );
-});
-
-// ── Fetch ────────────────────────────────────────────────────────
-self.addEventListener('fetch', (e) => {
-  const { request } = e;
-  const url = new URL(request.url);
-
-  // Only handle GET
-  if (request.method !== 'GET') return;
-
-  // Skip: API, socket.io, Firebase, cross-origin
-  if (
-    url.pathname.startsWith('/api/') ||
-    url.pathname.startsWith('/socket.io') ||
-    url.pathname.startsWith('/__/') ||
-    url.origin !== self.location.origin
-  ) return;
-
-  // ── Images: cache-first, long TTL ──
-  if (/\.(png|jpg|jpeg|webp|gif|svg|ico)$/.test(url.pathname)) {
-    e.respondWith(
-      caches.open(IMAGE_CACHE).then(async cache => {
-        const cached = await cache.match(request);
-        if (cached) return cached;
-        const res = await fetch(request);
-        if (res.ok) cache.put(request, res.clone());
-        return res;
-      })
-    );
-    return;
-  }
-
-  // ── JS/CSS assets (hashed filenames): cache-first ──
-  if (/\/assets\//.test(url.pathname)) {
-    e.respondWith(
-      caches.open(STATIC_CACHE).then(async cache => {
-        const cached = await cache.match(request);
-        if (cached) return cached;
-        const res = await fetch(request);
-        if (res.ok) cache.put(request, res.clone());
-        return res;
-      })
-    );
-    return;
-  }
-
-  // ── HTML pages: network-first, fallback to cache ──
-  if (request.headers.get('accept')?.includes('text/html')) {
-    e.respondWith(
-      fetch(request)
-        .then(res => {
-          if (res.ok) {
-            caches.open(DYNAMIC_CACHE).then(c => c.put(request, res.clone()));
-          }
-          return res;
-        })
-        .catch(() => caches.match(request) || caches.match('/index.html'))
-    );
-    return;
-  }
-
-  // ── Everything else: stale-while-revalidate ──
-  e.respondWith(
-    caches.open(DYNAMIC_CACHE).then(async cache => {
-      const cached = await cache.match(request);
-      const fetchPromise = fetch(request).then(res => {
-        if (res.ok) cache.put(request, res.clone());
-        return res;
-      }).catch(() => cached);
-      return cached || fetchPromise;
-    })
-  );
-});
-
-// ── Push notifications ───────────────────────────────────────────
-self.addEventListener('push', (e) => {
-  if (!e.data) return;
-  
-  try {
-    const data = e.data.json();
-    const options = {
-      body: data.body || '',
-      icon: data.icon || '/favicon.svg',
-      badge: data.badge || '/favicon.svg',
-      data: { url: data.url || '/', ...data.data },
-      vibrate: data.vibrate || [100, 50, 100],
-      tag: data.tag || 'general',
-      renotify: data.renotify !== false,
-      requireInteraction: data.requireInteraction || false,
-      timestamp: data.timestamp || Date.now(),
-      actions: data.type === 'message' ? [
-        { action: 'reply', title: 'Reply', icon: '/favicon.svg' },
-        { action: 'view', title: 'View', icon: '/favicon.svg' },
-      ] : [],
-    };
-
-    e.waitUntil(
-      self.registration.showNotification(data.title || 'MRU Connect', options)
-    );
-  } catch (err) {
-    console.error('[SW] Push error:', err);
-  }
-});
-
-// ── Notification click ───────────────────────────────────────────
-self.addEventListener('notificationclick', (e) => {
-  e.notification.close();
-  
-  const url = e.notification.data?.url || '/';
-  
-  e.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true })
-      .then(clientList => {
-        // Focus existing window if available
-        for (const client of clientList) {
-          if (client.url.includes(url.split('?')[0]) && 'focus' in client) {
-            return client.focus();
-          }
-        }
-        // Open new window
-        if (clients.openWindow) {
-          return clients.openWindow(url);
-        }
-      })
-  );
-});
-
-// ── Background sync for offline messages ─────────────────────────
-self.addEventListener('sync', (e) => {
-  if (e.tag === 'sync-messages') {
-    e.waitUntil(syncOfflineMessages());
-  }
-});
-
-async function syncOfflineMessages() {
-  try {
-    // Get pending messages from IndexedDB
-    const db = await openDB();
-    const tx = db.transaction('pendingMessages', 'readonly');
-    const store = tx.objectStore('pendingMessages');
-    const messages = await store.getAll();
-    
-    // Send each message
-    for (const msg of messages) {
-      try {
-        const response = await fetch(msg.url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...msg.headers },
-          body: JSON.stringify(msg.data),
-        });
-        
-        if (response.ok) {
-          // Remove from pending
-          const deleteTx = db.transaction('pendingMessages', 'readwrite');
-          await deleteTx.objectStore('pendingMessages').delete(msg.id);
-        }
-      } catch (err) {
-        console.error('[SW] Sync failed for message:', err);
-      }
-    }
-  } catch (err) {
-    console.error('[SW] Background sync error:', err);
-  }
 }
 
 function openDB() {

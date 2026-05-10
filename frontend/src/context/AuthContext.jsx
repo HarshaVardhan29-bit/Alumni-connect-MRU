@@ -3,7 +3,7 @@ import { signInWithPopup } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
 import api from '../api/axios';
 import SuspendedScreen from '../components/SuspendedScreen';
-import { subscribeToPush } from '../utils/pushSubscribe';
+import { subscribeToPush, unsubscribeFromPush } from '../utils/pushSubscribe';
 
 const AuthContext = createContext();
 
@@ -165,9 +165,12 @@ export function AuthProvider({ children }) {
     setTimeout(() => subscribeToPush(), 2000);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    // Remove FCM token from backend before clearing session
+    await unsubscribeFromPush().catch(() => {});
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    localStorage.removeItem('savedPosts');
     setSuspended(false);
     setUser(null);
   };

@@ -1,67 +1,87 @@
+import { getToken, onMessage } from 'firebase/messaging';
+import { getFirebaseMessaging } from '../firebase';
 import api from '../api/axios';
 
+const VAPID_KEY = import.meta.env.VITE_FIREBASE_VAPID_KEY;
+
 /**
- * Subscribe the current device to push notifications.
- * Call this after user logs in.
+ * Subscribe the current device to FCM push notifications.
+ * Flow:
+ *   1. Request notification permission
+ *   2. Get FCM registration token via Firebase SDK
+ *   3. Send token to backend → stored in MongoDB
+ *   4. Register foreground message handler
  */
 export async function subscribeToPush() {
   try {
-    // Check browser support
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (!('Notification' in window)) return;
 
-    // Get VAPID public key from backend
-    const { data } = await api.get('/users/vapid-public-key');
-    if (!data.key) return;
-
-    // Get service worker registration
-    const reg = await navigator.serviceWorker.ready;
-
-    // Check existing subscription
-    let sub = await reg.pushManager.getSubscription();
-
-    if (!sub) {
-      // Request permission
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') return;
-
-      // Subscribe
-      sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(data.key),
-      });
+    // Request permission
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      console.log('[FCM] Notification permission denied');
+      return;
     }
 
-    // Send subscription to backend
-    await api.post('/users/push-subscribe', { subscription: sub.toJSON() });
-    console.log('[Push] Subscribed successfully');
+    const messaging = await getFirebaseMessaging();
+    if (!messaging) {
+      console.log('[FCM] Messaging not supported in this browser');
+      return;
+    }
+
+    // Get FCM registration token
+    const token = await getToken(messaging, {
+      vapidKey: VAPID_KEY,
+      serviceWorkerRegistration: await navigator.serviceWorker.ready,
+    });
+
+    if (!token) {
+      console.log('[FCM] No registration token received');
+      return;
+    }
+
+    // Send token to backend
+    await api.post('/users/fcm-token', { token });
+    console.log('[FCM] Token registered successfully');
+
+    // Handle foreground messages (app is open)
+    onMessage(messaging, (payload) => {
+      console.log('[FCM] Foreground message:', payload);
+      const { title, body } = payload.notification || {};
+      const url = payload.data?.url || '/';
+
+      // Show browser notification even when app is open
+      if (Notification.permission === 'granted') {
+        const notif = new Notification(title || 'MRU Connect', {
+          body: body || '',
+          icon: '/favicon.svg',
+          badge: '/favicon.svg',
+          data: { url },
+          tag: payload.data?.type || 'general',
+        });
+        notif.onclick = () => {
+          window.focus();
+          window.location.href = url;
+          notif.close();
+        };
+      }
+    });
+
   } catch (err) {
-    console.log('[Push] Subscription failed:', err.message);
+    console.log('[FCM] Setup failed:', err.message);
   }
 }
 
 /**
- * Unsubscribe from push notifications.
+ * Remove FCM token from backend when user logs out.
  */
 export async function unsubscribeFromPush() {
   try {
-    if (!('serviceWorker' in navigator)) return;
-    const reg = await navigator.serviceWorker.ready;
-    const sub = await reg.pushManager.getSubscription();
-    if (sub) {
-      await api.delete('/users/push-unsubscribe', { data: { endpoint: sub.endpoint } });
-      await sub.unsubscribe();
+    const messaging = await getFirebaseMessaging();
+    if (!messaging) return;
+    const token = await getToken(messaging, { vapidKey: VAPID_KEY }).catch(() => null);
+    if (token) {
+      await api.delete('/users/fcm-token', { data: { token } }).catch(() => {});
     }
   } catch {}
-}
-
-// Helper: convert base64 VAPID key to Uint8Array
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
 }

@@ -3,34 +3,43 @@ const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 const { sendPushToUser } = require('../utils/pushNotification');
 
-// POST /api/users/push-subscribe — save push subscription
+// POST /api/users/fcm-token — save FCM registration token
+router.post('/fcm-token', protect, async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ message: 'No token provided' });
+    // Add token if not already saved (deduplicate)
+    await User.findByIdAndUpdate(req.user._id, {
+      $addToSet: { fcmTokens: token },
+    });
+    res.json({ message: 'FCM token saved' });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// DELETE /api/users/fcm-token — remove FCM token on logout
+router.delete('/fcm-token', protect, async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (token) {
+      await User.findByIdAndUpdate(req.user._id, {
+        $pull: { fcmTokens: token },
+      });
+    }
+    res.json({ message: 'FCM token removed' });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// POST /api/users/push-subscribe — legacy Web Push (kept for backward compat)
 router.post('/push-subscribe', protect, async (req, res) => {
-  try {
-    const { subscription } = req.body;
-    if (!subscription?.endpoint) return res.status(400).json({ message: 'Invalid subscription' });
-    // Add subscription if not already saved (deduplicate by endpoint)
-    await User.findByIdAndUpdate(req.user._id, {
-      $pull: { pushSubscriptions: { endpoint: subscription.endpoint } } // remove old
-    });
-    await User.findByIdAndUpdate(req.user._id, {
-      $push: { pushSubscriptions: subscription }
-    });
-    res.json({ message: 'Subscribed' });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  res.json({ message: 'Migrated to FCM' });
 });
 
-// DELETE /api/users/push-unsubscribe — remove push subscription
+// DELETE /api/users/push-unsubscribe — legacy Web Push (kept for backward compat)
 router.delete('/push-unsubscribe', protect, async (req, res) => {
-  try {
-    const { endpoint } = req.body;
-    await User.findByIdAndUpdate(req.user._id, {
-      $pull: { pushSubscriptions: { endpoint } }
-    });
-    res.json({ message: 'Unsubscribed' });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  res.json({ message: 'Migrated to FCM' });
 });
 
-// GET /api/users/vapid-public-key — get VAPID public key for frontend
+// GET /api/users/vapid-public-key — legacy (kept for backward compat)
 router.get('/vapid-public-key', (req, res) => {
   res.json({ key: process.env.VAPID_PUBLIC_KEY || '' });
 });
