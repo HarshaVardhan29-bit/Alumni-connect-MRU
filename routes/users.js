@@ -275,10 +275,18 @@ router.get('/all', protect, async (req, res) => {
 // GET /api/users/:id  — public profile
 router.get('/:id', protect, async (req, res) => {
   try {
+    // Validate ObjectId format to avoid CastError
+    if (!req.params.id.match(/^[a-fA-F0-9]{24}$/)) {
+      return res.status(404).json({ message: 'User not found' });
+    }
     const user = await User.findById(req.params.id).select('-password');
     if (!user) return res.status(404).json({ message: 'User not found' });
+    // If user is deactivated, still return their profile but mark it
     res.json(user);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) {
+    if (err.name === 'CastError') return res.status(404).json({ message: 'User not found' });
+    res.status(500).json({ message: err.message });
+  }
 });
 
 module.exports = router;

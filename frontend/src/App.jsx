@@ -1,5 +1,5 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { useState } from 'react';
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import { useAuth } from './context/AuthContext';
 import PageLoader from './components/PageLoader';
 import NetworkStatus from './components/NetworkStatus';
@@ -51,6 +51,17 @@ function AdminRoute({ children }) {
 export default function App() {
   const [loaded, setLoaded] = useState(false);
   const { user } = useAuth();
+  const navigate = useNavigate();
+
+  // Handle push notification taps from mobile app
+  useEffect(() => {
+    const handler = (e) => {
+      const url = e.detail?.url;
+      if (url) navigate(url);
+    };
+    window.addEventListener('push-navigate', handler);
+    return () => window.removeEventListener('push-navigate', handler);
+  }, [navigate]);
 
   return (
     <>

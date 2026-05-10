@@ -5,7 +5,7 @@ import { AuthProvider } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
 import App from './App';
 import './index.css';
-import { hideSplash, setStatusBarDark } from './utils/capacitor';
+import { hideSplash, setStatusBarDark, registerPushNotifications } from './utils/capacitor';
 
 // Apply saved theme before render — default is dark
 const savedTheme = localStorage.getItem('theme') || 'dark';
@@ -27,6 +27,7 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 // Native app init
 setStatusBarDark();
 hideSplash();
+registerPushNotifications(); // ← register push for mobile app
 
 // Use HashRouter for Capacitor (file:// protocol), BrowserRouter for web
 const isNative = window.location.protocol === 'capacitor:' ||

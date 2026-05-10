@@ -169,7 +169,7 @@ io.on('connection', (socket) => {
     if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
     onlineUsers.get(userId).add(socket.id);
 
-    // Broadcast online status to everyone
+    // Always broadcast online status (handles reconnects too)
     io.emit('user:online', { userId, online: true });
   });
 
@@ -242,7 +242,7 @@ io.on('connection', (socket) => {
 
   // Check if a user is online
   socket.on('user:check_online', ({ userId }) => {
-    const isOnline = onlineUsers.has(userId) && onlineUsers.get(userId).size > 0;
+    const isOnline = onlineUsers.has(String(userId)) && onlineUsers.get(String(userId)).size > 0;
     socket.emit('user:status', { userId, online: isOnline });
   });
 

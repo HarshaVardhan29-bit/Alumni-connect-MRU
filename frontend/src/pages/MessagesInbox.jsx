@@ -431,40 +431,52 @@ function ChatPanel({ mentorship, user, socketRef }) {
     const socket = socketRef?.current;
     if (socket) {
       socket.emit('join_room', id);
-      socket.on('receive_message', msg => {
+
+      const onMessage = msg => {
         setMessages(prev => prev.find(m => m._id === msg._id) ? prev : [...prev, msg]);
-        // If we're the recipient, mark as read immediately since we're looking at the chat
+        // If we're the recipient and chat is open, mark as read immediately
         if (String(msg.sender?._id || msg.sender) !== uid) {
-          api.get(`/messages/${id}`).catch(() => {}); // triggers read marking
+          api.get(`/messages/${id}`).catch(() => {});
         }
-      });
+      };
 
-      // Listen for reaction updates
-      socket.on('message:reaction', ({ messageId, reactions }) => {
+      const onReaction = ({ messageId, reactions }) => {
         setMessages(prev => prev.map(m => m._id === messageId ? { ...m, reactions } : m));
-      });
+      };
 
-      // When other person opens chat → mark all our sent messages as read (✓ → ✓✓)
-      socket.on('messages:read', ({ readBy }) => {
+      const onRead = ({ readBy }) => {
         if (String(readBy) !== uid) {
           setMessages(prev => prev.map(m => ({ ...m, read: true })));
         }
-      });
+      };
+
+      const handleStatus = ({ userId, online }) => {
+        if (String(userId) === otherId) setIsOtherOnline(online);
+      };
+
+      // Re-check online status whenever socket reconnects
+      const onConnect = () => {
+        socket.emit('join_room', id);
+        socket.emit('user:check_online', { userId: otherId });
+      };
+
+      socket.on('receive_message', onMessage);
+      socket.on('message:reaction', onReaction);
+      socket.on('messages:read', onRead);
+      socket.on('user:online', handleStatus);
+      socket.on('user:status', handleStatus);
+      socket.on('connect', onConnect);
 
       // Check initial online status
       socket.emit('user:check_online', { userId: otherId });
 
-      // Listen for real-time status changes
-      const handleStatus = ({ userId, online }) => {
-        if (String(userId) === otherId) setIsOtherOnline(online);
-      };
-      socket.on('user:online', handleStatus);
-      socket.on('user:status', handleStatus);
-
       return () => {
-        socketRef?.current?.off('receive_message');
-        socketRef?.current?.off('user:online', handleStatus);
-        socketRef?.current?.off('user:status', handleStatus);
+        socket.off('receive_message', onMessage);
+        socket.off('message:reaction', onReaction);
+        socket.off('messages:read', onRead);
+        socket.off('user:online', handleStatus);
+        socket.off('user:status', handleStatus);
+        socket.off('connect', onConnect);
       };
     }
   }, [id, otherId]);

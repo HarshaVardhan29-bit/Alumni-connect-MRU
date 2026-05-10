@@ -46,7 +46,7 @@ const SpeakerIcon= () => <svg viewBox="0 0 24 24" width="20" height="20" fill="c
 
 export default function CallManager() {
   const { user } = useAuth();
-  const socketRef = useSocket();
+  const { socketRef } = useSocket();  // ← destructure correctly
 
   const [callState,    setCallState]    = useState('idle'); // idle | calling | incoming | active
   const [callType,     setCallType]     = useState('audio');
