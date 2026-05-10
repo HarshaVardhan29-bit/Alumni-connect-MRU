@@ -341,7 +341,6 @@ export default function ProfilePage() {
     } catch (e) { alert(e.response?.data?.message || 'Failed'); }
     finally { setRequesting(false); }
   };
-  };
 
   if (loading) return <DashLayout><div className="loading-screen">Loading…</div></DashLayout>;
 
