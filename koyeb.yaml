@@ -1,0 +1,51 @@
+name: mru-alumni-backend
+services:
+  - name: api
+    type: web
+    git:
+      repository: github.com/YOUR_USERNAME/mru-alumni-network
+      branch: main
+    build:
+      buildpack: nodejs
+      run_command: node server.js
+    env:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "8000"
+      - key: MONGO_URI
+        secret: true
+      - key: JWT_SECRET
+        secret: true
+      - key: ADMIN_JWT_SECRET
+        secret: true
+      - key: ADMIN_EMAIL
+        secret: true
+      - key: ADMIN_PASSWORD
+        secret: true
+      - key: ADMIN_NAME
+        secret: true
+      - key: ADMIN_EMAILS
+        secret: true
+      - key: MAIL_USER
+        secret: true
+      - key: MAIL_PASS
+        secret: true
+      - key: NEWS_API_KEY
+        secret: true
+      - key: FIREBASE_PROJECT_ID
+        secret: true
+      - key: FIREBASE_CLIENT_EMAIL
+        secret: true
+      - key: FIREBASE_PRIVATE_KEY
+        secret: true
+      - key: FRONTEND_URL
+        secret: true
+    ports:
+      - port: 8000
+        protocol: http
+    scaling:
+      min: 1
+      max: 1
+    regions:
+      - sin  # Singapore — closest to India

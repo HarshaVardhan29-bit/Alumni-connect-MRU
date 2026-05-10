@@ -1,0 +1,37 @@
+{
+  "name": "MRU MentorConnect AI",
+  "short_name": "MentorConnect",
+  "description": "Alumni Network Platform for MRU",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#6366f1",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["education", "social", "networking"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Feed",
+      "url": "/feed",
+      "description": "View your feed"
+    },
+    {
+      "name": "Messages",
+      "url": "/messages",
+      "description": "Check messages"
+    },
+    {
+      "name": "Profile",
+      "url": "/profile",
+      "description": "View your profile"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+services:
+  - type: web
+    name: mru-alumni-network
+    env: node
+    region: singapore
+    plan: free
+    rootDir: .
+    buildCommand: npm run build
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      # ── Database ──
+      - key: MONGO_URI
+        sync: false
+      # ── Auth ──
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_JWT_SECRET
+        sync: false
+      # ── Admin ──
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_NAME
+        sync: false
+      - key: ADMIN_EMAILS
+        sync: false
+      # ── Email ──
+      - key: MAIL_USER
+        sync: false
+      - key: MAIL_PASS
+        sync: false
+      # ── APIs ──
+      - key: NEWS_API_KEY
+        sync: false
+      # ── Firebase Admin ──
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+      # ── Google OAuth ──
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CALLBACK_URL
+        sync: false
+      # ── Frontend URL (same as this service after deploy) ──
+      - key: FRONTEND_URL
+        sync: false
