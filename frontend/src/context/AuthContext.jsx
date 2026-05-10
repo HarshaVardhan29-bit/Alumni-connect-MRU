@@ -1,14 +1,10 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import { signInWithRedirect, getRedirectResult, signInWithPopup } from 'firebase/auth';
+import { signInWithPopup } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
 import api from '../api/axios';
 import SuspendedScreen from '../components/SuspendedScreen';
 
 const AuthContext = createContext();
-
-const isLocalhost = () =>
-  window.location.hostname === 'localhost' ||
-  window.location.hostname === '127.0.0.1';
 
 export function AuthProvider({ children }) {
   const [user, setUser]                   = useState(null);
@@ -23,30 +19,10 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('account:suspended', handler);
   }, []);
 
-  // On mount: check redirect result first, then restore session
+  // On mount: restore session
   useEffect(() => {
     const init = async () => {
-      // 1. Check if returning from Google redirect
-      try {
-        const result = await getRedirectResult(auth);
-        if (result) {
-          const idToken = await result.user.getIdToken();
-          const res = await api.post('/auth/firebase/google', { idToken });
-          if (res.data.isNewUser) {
-            setPendingGoogle({ token: res.data.token, user: res.data.user });
-          } else {
-            localStorage.setItem('token', res.data.token);
-            localStorage.setItem('user', JSON.stringify(res.data.user));
-            setUser(res.data.user);
-          }
-          setLoading(false);
-          return;
-        }
-      } catch (err) {
-        // No redirect result or error — continue to session restore
-      }
-
-      // 2. Restore existing session
+      // Restore existing session
       const token = localStorage.getItem('token');
       const stored = localStorage.getItem('user');
       if (token && stored) {
@@ -110,27 +86,22 @@ export function AuthProvider({ children }) {
   };
 
   /**
-   * Google Sign-In:
-   * - localhost → popup (instant feedback)
-   * - production → redirect (avoids COOP popup issues)
+   * Google Sign-In via Firebase popup.
+   * Works on both localhost and production once COOP header is removed.
    */
   const googleLogin = async () => {
-    if (isLocalhost()) {
-      const result  = await signInWithPopup(auth, googleProvider);
-      const idToken = await result.user.getIdToken();
-      const res     = await api.post('/auth/firebase/google', { idToken });
-      if (res.data.isNewUser) {
-        setPendingGoogle({ token: res.data.token, user: res.data.user });
-        return { isNewUser: true };
-      } else {
-        localStorage.setItem('token', res.data.token);
-        localStorage.setItem('user', JSON.stringify(res.data.user));
-        setUser(res.data.user);
-        return res.data;
-      }
+    const result  = await signInWithPopup(auth, googleProvider);
+    const idToken = await result.user.getIdToken();
+    const res     = await api.post('/auth/firebase/google', { idToken });
+
+    if (res.data.isNewUser) {
+      setPendingGoogle({ token: res.data.token, user: res.data.user });
+      return { isNewUser: true };
     } else {
-      // Production: redirect flow — page will reload, result handled in useEffect above
-      await signInWithRedirect(auth, googleProvider);
+      localStorage.setItem('token', res.data.token);
+      localStorage.setItem('user', JSON.stringify(res.data.user));
+      setUser(res.data.user);
+      return res.data;
     }
   };
 

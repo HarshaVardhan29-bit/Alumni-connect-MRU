@@ -41,18 +41,14 @@ export default function LoginPage() {
     setGoogleLoading(true); setError('');
     try {
       const result = await googleLogin();
-      // On production, googleLogin() triggers a redirect — result will be undefined
-      // The redirect result is handled in AuthContext useEffect
       if (result && !result.isNewUser) navigate('/feed');
-      // If result is undefined, page is redirecting — keep loading state
     } catch (err) {
       if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
         setGoogleLoading(false);
         return;
       }
       setError(err.response?.data?.message || 'Google sign-in failed. Please try again.');
-      setGoogleLoading(false);
-    }
+    } finally { setGoogleLoading(false); }
   };
 
   return (

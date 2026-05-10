@@ -67,8 +67,15 @@ app.use(compression({
 }));
 app.use(helmet({
   contentSecurityPolicy: false,
-  crossOriginOpenerPolicy: { policy: 'unsafe-none' },
+  crossOriginOpenerPolicy: false,
 }));
+
+// Explicitly remove COOP header so Firebase popup can communicate back
+app.use((req, res, next) => {
+  res.removeHeader('Cross-Origin-Opener-Policy');
+  res.removeHeader('Cross-Origin-Embedder-Policy');
+  next();
+});
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false }));
 app.use(express.json({ limit: '20mb' }));
 
