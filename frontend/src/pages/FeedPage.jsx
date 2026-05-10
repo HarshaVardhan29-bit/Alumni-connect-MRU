@@ -54,28 +54,18 @@ function CharRing({ used, max }) {
 function WhoToConnect() {
   const { user } = useAuth();
   const [people, setPeople]     = useState([]);
-  const [followed, setFollowed] = useState(new Set());
   const navigate = useNavigate();
 
   useEffect(() => {
-    Promise.all([
-      api.get('/users/all'),
-      api.get('/users/me'),
-    ]).then(([allRes, meRes]) => {
-      const myFollowing = new Set((meRes.data.following || []).map(String));
-      const myId = String(user?._id || user?.id || '');
-      const suggestions = allRes.data
+    const myId = String(user?._id || user?.id || '');
+    const myFollowing = new Set((user?.following || []).map(String));
+    api.get('/users/all').then(r => {
+      const suggestions = r.data
         .filter(p => !myFollowing.has(String(p._id)) && String(p._id) !== myId)
         .slice(0, 3);
       setPeople(suggestions);
-      setFollowed(myFollowing);
-    }).catch(() => {
-      api.get('/users/all').then(r => {
-        const myId = String(user?._id || user?.id || '');
-        setPeople(r.data.filter(p => String(p._id) !== myId).slice(0, 3));
-      }).catch(() => {});
-    });
-  }, []);
+    }).catch(() => {});
+  }, [user?._id || user?.id]);
 
   const handleFollow = async (e, pid) => {
     e.stopPropagation();

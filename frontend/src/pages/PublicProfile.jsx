@@ -41,11 +41,10 @@ export default function PublicProfile() {
       api.get(`/posts/user/${id}`),
       api.get(`/posts/user/${id}/replies`),
       api.get('/mentorship/my'),
-      api.get('/users/me'),
-    ]).then(([pRes, postsRes, repliesRes, menRes, meRes]) => {
+    ]).then(([pRes, postsRes, repliesRes, menRes]) => {
       setProfile(pRes.data);
-      setPosts(postsRes.data);
-      setReplies(repliesRes.data);
+      setPosts(postsRes.data || []);
+      setReplies(repliesRes.data || []);
 
       // Check mentorship request
       const already = menRes.data.find(m =>
@@ -53,10 +52,10 @@ export default function PublicProfile() {
       );
       if (already) setRequested(true);
 
-      // Check follow status
-      const me = meRes.data;
-      const isFollowing = me.following?.map(String).includes(String(id));
-      const isPending   = pRes.data.followRequests?.map(String).includes(String(me._id));
+      // Check follow status using local user object (no extra API call needed)
+      const myId = String(user?._id || user?.id || '');
+      const isFollowing = user?.following?.map(String).includes(String(id)) || false;
+      const isPending   = pRes.data.followRequests?.map(String).includes(myId) || false;
       setFollowing(isFollowing);
       setFollowReq(isPending && !isFollowing);
     }).catch(console.error).finally(() => setLoading(false));

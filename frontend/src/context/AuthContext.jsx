@@ -29,6 +29,9 @@ export function AuthProvider({ children }) {
       try {
         const parsed = JSON.parse(stored);
         if (!Array.isArray(parsed.savedPosts)) parsed.savedPosts = [];
+        // Ensure both _id and id are always set (handles old sessions)
+        if (!parsed.id && parsed._id) parsed.id = parsed._id;
+        if (!parsed._id && parsed.id) parsed._id = parsed.id;
         setUser(parsed);
         setLoading(false);
 
@@ -92,17 +95,33 @@ export function AuthProvider({ children }) {
 
   const register = async (data) => {
     const res = await api.post('/auth/register', data);
+    const userData = {
+      ...res.data.user,
+      id: res.data.user._id,
+      savedPosts: Array.isArray(res.data.user.savedPosts)
+        ? res.data.user.savedPosts.map(String)
+        : [],
+    };
     localStorage.setItem('token', res.data.token);
-    localStorage.setItem('user', JSON.stringify(res.data.user));
-    setUser(res.data.user);
+    localStorage.setItem('user', JSON.stringify(userData));
+    localStorage.setItem('savedPosts', JSON.stringify(userData.savedPosts));
+    setUser(userData);
     return res.data;
   };
 
   const login = async (data) => {
     const res = await api.post('/auth/login', data);
+    const userData = {
+      ...res.data.user,
+      id: res.data.user._id, // ensure both _id and id are set
+      savedPosts: Array.isArray(res.data.user.savedPosts)
+        ? res.data.user.savedPosts.map(String)
+        : [],
+    };
     localStorage.setItem('token', res.data.token);
-    localStorage.setItem('user', JSON.stringify(res.data.user));
-    setUser(res.data.user);
+    localStorage.setItem('user', JSON.stringify(userData));
+    localStorage.setItem('savedPosts', JSON.stringify(userData.savedPosts));
+    setUser(userData);
     // Subscribe to push notifications after login — with retry
     setTimeout(() => subscribeToPush(), 1500);
     setTimeout(() => subscribeToPush(), 8000); // retry in case SW wasn't ready
@@ -122,9 +141,17 @@ export function AuthProvider({ children }) {
       setPendingGoogle({ token: res.data.token, user: res.data.user });
       return { isNewUser: true };
     } else {
+      const userData = {
+        ...res.data.user,
+        id: res.data.user._id,
+        savedPosts: Array.isArray(res.data.user.savedPosts)
+          ? res.data.user.savedPosts.map(String)
+          : [],
+      };
       localStorage.setItem('token', res.data.token);
-      localStorage.setItem('user', JSON.stringify(res.data.user));
-      setUser(res.data.user);
+      localStorage.setItem('user', JSON.stringify(userData));
+      localStorage.setItem('savedPosts', JSON.stringify(userData.savedPosts));
+      setUser(userData);
       return res.data;
     }
   };

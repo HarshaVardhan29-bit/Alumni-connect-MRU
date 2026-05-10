@@ -39,7 +39,6 @@ export function SocketProvider({ children }) {
     socketRef.current = socket;
 
     const uid = user._id || user.id;
-
     const joinRoom = () => {
       socket.emit('join_user', uid);
       setIsConnected(true);

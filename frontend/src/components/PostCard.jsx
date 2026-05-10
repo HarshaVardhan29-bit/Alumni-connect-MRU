@@ -93,29 +93,29 @@ function ShareMenu({ postId, onClose }) {
 
 /* ── Main PostCard ── */
 export default function PostCard({ post, onDelete, onReply }) {
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const { postLikeEvent, postRetweetEvent } = useSocket();
   const navigate = useNavigate();
-  const uid = user?.id || user?._id;
+  // Always prefer _id, fall back to id — consistent across all login methods
+  const uid = user?._id || user?.id;
+
+  // Derive initial bookmark state from user.savedPosts (works on any device, no localStorage needed)
+  const isSavedInitially = Array.isArray(user?.savedPosts)
+    ? user.savedPosts.map(String).includes(String(post._id))
+    : JSON.parse(localStorage.getItem('savedPosts') || '[]').includes(String(post._id));
 
   const [liked,      setLiked]     = useState(post.likes?.map(String).includes(String(uid)));
   const [likeCount,  setLikeCount] = useState(post.likes?.length || 0);
   const [retweeted,  setRetweeted] = useState(post.retweets?.map(String).includes(String(uid)));
   const [rtCount,    setRtCount]   = useState(post.retweets?.length || 0);
   const [replyCount, setReplyCount] = useState(post.replies?.length || 0);
-  const [bookmarked, setBookmarked] = useState(false);
+  const [bookmarked, setBookmarked] = useState(isSavedInitially);
   const [replying,   setReplying]  = useState(false);
   const [replyText,  setReplyText] = useState('');
   const [sending,    setSending]   = useState(false);
   const [expanded,   setExpanded]  = useState(false);
   const [lightbox,   setLightbox]  = useState(null);
   const [showShare,  setShowShare] = useState(false);
-
-  // Load saved state from localStorage on mount
-  useEffect(() => {
-    const saved = JSON.parse(localStorage.getItem('savedPosts') || '[]');
-    if (saved.includes(String(post._id))) setBookmarked(true);
-  }, [post._id]);
 
   // Real-time like updates from other users
   useEffect(() => {
@@ -183,18 +183,20 @@ export default function PostCard({ post, onDelete, onReply }) {
     e.stopPropagation();
     const next = !bookmarked;
     setBookmarked(next);
-    // persist to localStorage immediately
-    const saved = JSON.parse(localStorage.getItem('savedPosts') || '[]');
-    const updated = next
-      ? [...new Set([...saved, String(post._id)])]
-      : saved.filter(id => id !== String(post._id));
-    localStorage.setItem('savedPosts', JSON.stringify(updated));
+    // Update user.savedPosts in context + localStorage (single source of truth)
+    const currentSaved = (user?.savedPosts || []).map(String);
+    const updatedSaved = next
+      ? [...new Set([...currentSaved, String(post._id)])]
+      : currentSaved.filter(id => id !== String(post._id));
+    updateUser({ savedPosts: updatedSaved });
+    localStorage.setItem('savedPosts', JSON.stringify(updatedSaved));
     try {
       await api.put(`/posts/${post._id}/save`);
     } catch {
       // revert on failure
       setBookmarked(!next);
-      localStorage.setItem('savedPosts', JSON.stringify(saved));
+      updateUser({ savedPosts: currentSaved });
+      localStorage.setItem('savedPosts', JSON.stringify(currentSaved));
     }
   };
 

@@ -251,8 +251,8 @@ io.on('connection', (socket) => {
   });
 
   // ── WebRTC Signaling ──
-  socket.on('call:initiate', ({ to, from, callType, offer }) => {
-    io.to(`user_${to}`).emit('call:incoming', { from, callType, offer, socketId: socket.id });
+  socket.on('call:initiate', ({ to, from, fromUser, callType, offer }) => {
+    io.to(`user_${to}`).emit('call:incoming', { from, fromUser, callType, offer, socketId: socket.id });
   });
   socket.on('call:answer', ({ to, answer }) => {
     io.to(`user_${to}`).emit('call:answered', { answer });

@@ -241,7 +241,7 @@ export default function ProfilePage() {
   const { user, refreshUser } = useAuth();
   const navigate = useNavigate();
 
-  const isOwn = !id || id === String(user?._id || user?.id);
+  const isOwn = !id || id === String(user?._id || user?.id || '');
 
   const [tab,        setTab]       = useState('Posts');
   const [posts,      setPosts]     = useState([]);
@@ -258,18 +258,35 @@ export default function ProfilePage() {
   const [requesting, setRequesting]= useState(false);
 
   useEffect(() => {
+    if (!user) return; // wait for auth to load
+    const uid = user?._id || user?.id;
+    if (!uid) return;
+
+    setLoading(true);
+    setPosts([]);
+    setReplies([]);
+
     if (isOwn) {
-      // Own profile
-      const uid = user?._id || user?.id;
+      // Own profile — fetch fresh user data + posts in parallel
       Promise.all([
         api.get('/users/me'),
         api.get(`/posts/user/${uid}`),
         api.get(`/posts/user/${uid}/replies`),
       ]).then(([meRes, postsRes, repliesRes]) => {
         setLocalUser(prev => ({ ...prev, ...meRes.data }));
-        setPosts(postsRes.data);
-        setReplies(repliesRes.data);
-      }).catch(() => {}).finally(() => setLoading(false));
+        setPosts(postsRes.data || []);
+        setReplies(repliesRes.data || []);
+      }).catch(err => {
+        console.error('Profile load error:', err);
+        // Still show posts even if /users/me fails
+        Promise.all([
+          api.get(`/posts/user/${uid}`),
+          api.get(`/posts/user/${uid}/replies`),
+        ]).then(([postsRes, repliesRes]) => {
+          setPosts(postsRes.data || []);
+          setReplies(repliesRes.data || []);
+        }).catch(() => {});
+      }).finally(() => setLoading(false));
     } else {
       // Other user's profile
       Promise.all([
@@ -277,23 +294,23 @@ export default function ProfilePage() {
         api.get(`/posts/user/${id}`),
         api.get(`/posts/user/${id}/replies`),
         api.get('/mentorship/my'),
-        api.get('/users/me'),
-      ]).then(([pRes, postsRes, repliesRes, menRes, meRes]) => {
+      ]).then(([pRes, postsRes, repliesRes, menRes]) => {
         setProfileData(pRes.data);
-        setPosts(postsRes.data);
-        setReplies(repliesRes.data);
+        setPosts(postsRes.data || []);
+        setReplies(repliesRes.data || []);
         // Check mentorship
         const already = menRes.data.find(m =>
           (m.alumni?._id === id || m.alumni === id) && ['pending','accepted'].includes(m.status)
         );
         if (already) setRequested(true);
-        // Check follow
-        const me = meRes.data;
-        setFollowing(me.following?.map(String).includes(String(id)) || false);
-        setFollowReq(pRes.data.followRequests?.map(String).includes(String(me._id)) || false);
-      }).catch(() => {}).finally(() => setLoading(false));
+        // Check follow status using local user data (no extra API call needed)
+        setFollowing(user.following?.map(String).includes(String(id)) || false);
+        setFollowReq(pRes.data.followRequests?.map(String).includes(String(uid)) || false);
+      }).catch(err => {
+        console.error('Profile load error:', err);
+      }).finally(() => setLoading(false));
     }
-  }, [id, isOwn]);
+  }, [id, isOwn, user?._id || user?.id]);
 
   const handleSaved = (updated) => {
     const next = { ...localUser, ...updated };

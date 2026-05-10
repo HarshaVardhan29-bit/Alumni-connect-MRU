@@ -150,14 +150,16 @@ export default function CallManager() {
       if (candidate) socketRef.current?.emit('call:ice', { to: targetId, candidate });
     };
     pc.ontrack = (e) => {
-      const stream = e.streams[0];
+      const stream = e.streams[0] || new MediaStream([e.track]);
       remoteStream.current = stream;
       // Attach immediately if video element already mounted
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = stream;
+        remoteVideoRef.current.play().catch(() => {});
       }
     };
     pc.onconnectionstatechange = () => {
+      console.log('[WebRTC] Connection state:', pc.connectionState);
       if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
         cleanup();
       }
@@ -165,7 +167,6 @@ export default function CallManager() {
     pc.oniceconnectionstatechange = () => {
       console.log('[WebRTC] ICE state:', pc.iceConnectionState);
       if (pc.iceConnectionState === 'failed') {
-        // Try ICE restart
         pc.restartIce?.();
       }
     };

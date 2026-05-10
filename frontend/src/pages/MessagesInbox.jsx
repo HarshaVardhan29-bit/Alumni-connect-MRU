@@ -459,61 +459,73 @@ function ChatPanel({ mentorship, user, socketRef }) {
     : mentorship.student;
   const otherId = String(other?._id || '');
 
+  // Load messages whenever the chat id changes
   useEffect(() => {
     setLoading(true);
-    api.get(`/messages/${id}`).then(r => setMessages(r.data)).catch(() => {}).finally(() => setLoading(false));
+    setMessages([]);
+    api.get(`/messages/${id}`)
+      .then(r => setMessages(r.data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [id]);
+
+  useEffect(() => {
     const socket = socketRef?.current;
-    if (socket) {
+    if (!socket) return;
+
+    socket.emit('join_room', id);
+
+    const onMessage = msg => {
+      // Only handle messages for this chat
+      const msgMid = msg.mentorshipId || msg.mentorship;
+      if (msgMid && String(msgMid) !== String(id)) return;
+      setMessages(prev => prev.find(m => m._id === msg._id) ? prev : [...prev, msg]);
+      // Mark as read if we're the recipient
+      if (String(msg.sender?._id || msg.sender) !== uid) {
+        api.get(`/messages/${id}`).catch(() => {});
+      }
+    };
+
+    const onReaction = ({ messageId, reactions }) => {
+      setMessages(prev => prev.map(m => m._id === messageId ? { ...m, reactions } : m));
+    };
+
+    const onRead = ({ readBy, mentorshipId: mid }) => {
+      if (mid && String(mid) !== String(id)) return;
+      if (String(readBy) !== uid) {
+        setMessages(prev => prev.map(m => ({ ...m, read: true })));
+      }
+    };
+
+    const handleStatus = ({ userId, online }) => {
+      if (String(userId) === otherId) setIsOtherOnline(online);
+    };
+
+    const onConnect = () => {
       socket.emit('join_room', id);
-
-      const onMessage = msg => {
-        setMessages(prev => prev.find(m => m._id === msg._id) ? prev : [...prev, msg]);
-        // If we're the recipient and chat is open, mark as read immediately
-        if (String(msg.sender?._id || msg.sender) !== uid) {
-          api.get(`/messages/${id}`).catch(() => {});
-        }
-      };
-
-      const onReaction = ({ messageId, reactions }) => {
-        setMessages(prev => prev.map(m => m._id === messageId ? { ...m, reactions } : m));
-      };
-
-      const onRead = ({ readBy }) => {
-        if (String(readBy) !== uid) {
-          setMessages(prev => prev.map(m => ({ ...m, read: true })));
-        }
-      };
-
-      const handleStatus = ({ userId, online }) => {
-        if (String(userId) === otherId) setIsOtherOnline(online);
-      };
-
-      // Re-check online status whenever socket reconnects
-      const onConnect = () => {
-        socket.emit('join_room', id);
-        socket.emit('user:check_online', { userId: otherId });
-      };
-
-      socket.on('receive_message', onMessage);
-      socket.on('message:reaction', onReaction);
-      socket.on('messages:read', onRead);
-      socket.on('user:online', handleStatus);
-      socket.on('user:status', handleStatus);
-      socket.on('connect', onConnect);
-
-      // Check initial online status
       socket.emit('user:check_online', { userId: otherId });
+      // Re-fetch messages on reconnect to catch any missed ones
+      api.get(`/messages/${id}`).then(r => setMessages(r.data)).catch(() => {});
+    };
 
-      return () => {
-        socket.off('receive_message', onMessage);
-        socket.off('message:reaction', onReaction);
-        socket.off('messages:read', onRead);
-        socket.off('user:online', handleStatus);
-        socket.off('user:status', handleStatus);
-        socket.off('connect', onConnect);
-      };
-    }
-  }, [id, otherId]);
+    socket.on('receive_message', onMessage);
+    socket.on('message:reaction', onReaction);
+    socket.on('messages:read', onRead);
+    socket.on('user:online', handleStatus);
+    socket.on('user:status', handleStatus);
+    socket.on('connect', onConnect);
+
+    socket.emit('user:check_online', { userId: otherId });
+
+    return () => {
+      socket.off('receive_message', onMessage);
+      socket.off('message:reaction', onReaction);
+      socket.off('messages:read', onRead);
+      socket.off('user:online', handleStatus);
+      socket.off('user:status', handleStatus);
+      socket.off('connect', onConnect);
+    };
+  }, [id, otherId, socketRef?.current]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
@@ -521,9 +533,8 @@ function ChatPanel({ mentorship, user, socketRef }) {
     const fullPayload = replyTo ? { ...payload, replyToId: replyTo._id } : payload;
     const res = await api.post(`/messages/${id}`, fullPayload).catch(() => null);
     if (res) {
-      // Don't add manually — server emits receive_message to room (including us)
-      // The socket handler deduplicates by _id so no double message
-      socketRef?.current?.emit('send_message', { ...res.data, mentorshipId: id });
+      // Server already emits receive_message to the room (including sender).
+      // The socket handler deduplicates by _id — no need to add manually.
       setReplyTo(null);
     }
   };
@@ -632,12 +643,17 @@ function ChatPanel({ mentorship, user, socketRef }) {
       <div className="mc-body">
         {loading ? <div className="mc-empty">Loading…</div> : messages.length === 0 ? (
           <div className="mc-empty"><div style={{fontSize:'2rem',marginBottom:'.5rem'}}>👋</div><div>No messages yet. Say hello!</div></div>
-        ) : Object.entries(grouped).map(([day, msgs]) => (
+        ) : (() => {
+          // Build a flat index for sequential message numbering
+          const nonCallMsgs = messages.filter(m => m.type !== 'call');
+          const msgIndexMap = new Map(nonCallMsgs.map((m, i) => [m._id, i + 1]));
+          return Object.entries(grouped).map(([day, msgs]) => (
           <div key={day}>
             <div className="mc-day-divider"><span>{day}</span></div>
             {msgs.map((msg, i) => {
               const mine = uid === String(msg.sender?._id || msg.sender || '');
               const senderUser = mine ? user : (msg.sender?.firstName ? msg.sender : other);
+              const msgNum = msgIndexMap.get(msg._id);
               return (
                 <div
                   key={msg._id || i}
@@ -674,6 +690,7 @@ function ChatPanel({ mentorship, user, socketRef }) {
                       </div>
                     )}
                     <div className="mc-time">
+                      {msgNum && <span className="mc-msg-num">#{msgNum}</span>}
                       {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       {mine && (
                         <span className={`mc-tick${msg.read ? ' mc-tick-read' : ''}`}>
@@ -694,7 +711,8 @@ function ChatPanel({ mentorship, user, socketRef }) {
               );
             })}
           </div>
-        ))}
+        ));
+        })()}
         <div ref={bottomRef}/>
       </div>
 
@@ -880,33 +898,45 @@ function GroupChatPanel({ group, user, socketRef, onLeave, onGroupUpdate }) {
     const socket = socketRef?.current;
     if (socket) {
       socket.emit('join_group', group._id);
-      socket.on('receive_group_message', msg => setMessages(prev => prev.find(m => m._id === msg._id) ? prev : [...prev, msg]));
-      socket.on('group_message:reaction', ({ messageId, reactions }) =>
-        setMessages(prev => prev.map(m => m._id === messageId ? { ...m, reactions } : m))
-      );
-      socket.on('group_message:deleted', ({ messageId }) =>
-        setMessages(prev => prev.filter(m => m._id !== messageId))
-      );
-      socket.on('group_message:pinned', ({ messageId, pinned: p, text }) => {
+
+      const onGroupMsg = msg => setMessages(prev => prev.find(m => m._id === msg._id) ? prev : [...prev, msg]);
+      const onReaction = ({ messageId, reactions }) =>
+        setMessages(prev => prev.map(m => m._id === messageId ? { ...m, reactions } : m));
+      const onDeleted = ({ messageId }) =>
+        setMessages(prev => prev.filter(m => m._id !== messageId));
+      const onPinned = ({ messageId, pinned: p, text }) => {
         setMessages(prev => prev.map(m => m._id === messageId ? { ...m, pinned: p } : m));
         if (p) setPinned(prev => [{ _id: messageId, text }, ...prev.filter(x => x._id !== messageId)]);
         else   setPinned(prev => prev.filter(x => x._id !== messageId));
-      });
-      socket.on('group:typing', ({ name, userId: tid }) => {
+      };
+      const onTyping = ({ name, userId: tid }) => {
         if (tid === uid) return;
         setTyping(prev => prev.includes(name) ? prev : [...prev, name]);
         clearTimeout(typingTimer.current);
         typingTimer.current = setTimeout(() => setTyping([]), 3000);
-      });
+      };
+      const onConnect = () => {
+        socket.emit('join_group', group._id);
+        api.get(`/groups/${group._id}/messages`).then(r => setMessages(r.data)).catch(() => {});
+      };
+
+      socket.on('receive_group_message', onGroupMsg);
+      socket.on('group_message:reaction', onReaction);
+      socket.on('group_message:deleted', onDeleted);
+      socket.on('group_message:pinned', onPinned);
+      socket.on('group:typing', onTyping);
+      socket.on('connect', onConnect);
+
+      return () => {
+        socket.off('receive_group_message', onGroupMsg);
+        socket.off('group_message:reaction', onReaction);
+        socket.off('group_message:deleted', onDeleted);
+        socket.off('group_message:pinned', onPinned);
+        socket.off('group:typing', onTyping);
+        socket.off('connect', onConnect);
+      };
     }
-    return () => {
-      socketRef?.current?.off('receive_group_message');
-      socketRef?.current?.off('group_message:reaction');
-      socketRef?.current?.off('group_message:deleted');
-      socketRef?.current?.off('group_message:pinned');
-      socketRef?.current?.off('group:typing');
-    };
-  }, [group._id]);
+  }, [group._id, socketRef?.current]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
@@ -914,8 +944,8 @@ function GroupChatPanel({ group, user, socketRef, onLeave, onGroupUpdate }) {
     const fullPayload = replyTo ? { ...payload, replyTo: replyTo._id } : payload;
     const res = await api.post(`/groups/${group._id}/messages`, fullPayload).catch(() => null);
     if (res) {
-      setMessages(m => [...m, res.data]);
-      socketRef?.current?.emit('send_group_message', { ...res.data, groupId: group._id });
+      // Server already emits receive_group_message to the room via the API route.
+      // No need to re-emit from client — that causes duplicates.
       setReplyTo(null);
     }
   };
@@ -1530,10 +1560,19 @@ export default function MessagesInbox() {
       setUnreadCounts(prev => ({ ...prev, [mid]: (prev[mid] || 0) + 1 }));
     }
 
-    // Move this conv to top of list
+    // Move this conv to top of list (or fetch it if not in list yet)
     setConvs(prev => {
       const idx = prev.findIndex(c => c._id === mid);
-      if (idx <= 0) return prev;
+      if (idx < 0) {
+        // New conversation not in list — fetch it
+        api.get(`/mentorship/${mid}`).then(r => {
+          if (r.data?._id) {
+            setConvs(p => p.find(c => c._id === r.data._id) ? p : [r.data, ...p]);
+          }
+        }).catch(() => {});
+        return prev;
+      }
+      if (idx === 0) return prev;
       const updated = [...prev];
       const [conv] = updated.splice(idx, 1);
       return [{ ...conv, updatedAt: new Date().toISOString() }, ...updated];
