@@ -130,6 +130,20 @@ if (isProd) {
   });
 } else {
   app.get('/', (req, res) => res.json({ message: 'AlumniAI API running' }));
+
+// ── Firebase Auth handler proxy (needed for signInWithRedirect on non-Firebase-Hosted domains)
+app.get('/__/auth/*', async (req, res) => {
+  try {
+    const firebaseUrl = `https://alumni-network-mru.firebaseapp.com${req.path}${req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''}`;
+    const https = require('https');
+    https.get(firebaseUrl, (fbRes) => {
+      res.setHeader('Content-Type', fbRes.headers['content-type'] || 'text/html');
+      fbRes.pipe(res);
+    }).on('error', () => res.status(404).end());
+  } catch {
+    res.status(404).end();
+  }
+});
 }
 
 // Socket.io — real-time chat + notifications + WebRTC signaling
