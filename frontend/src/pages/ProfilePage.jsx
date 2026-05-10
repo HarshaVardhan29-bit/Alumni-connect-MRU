@@ -312,6 +312,24 @@ export default function ProfilePage() {
     } catch {}
   };
 
+  const handleMessage = async () => {
+    try {
+      const res = await api.get('/mentorship');
+      const mentorships = res.data;
+      const existing = mentorships.find(m =>
+        String(m.alumni?._id || m.alumni) === String(id) ||
+        String(m.student?._id || m.student) === String(id)
+      );
+      if (existing) {
+        navigate(`/messages/${existing._id}`);
+      } else {
+        navigate('/messages');
+      }
+    } catch {
+      navigate('/messages');
+    }
+  };
+
   const sendMentorshipRequest = async () => {
     setRequesting(true);
     try {
@@ -322,6 +340,7 @@ export default function ProfilePage() {
       setRequested(true);
     } catch (e) { alert(e.response?.data?.message || 'Failed'); }
     finally { setRequesting(false); }
+  };
   };
 
   if (loading) return <DashLayout><div className="loading-screen">Loading…</div></DashLayout>;
@@ -361,7 +380,7 @@ export default function ProfilePage() {
               <button className="xp-edit-btn" onClick={() => setEditOpen(true)}>✏️ Edit profile</button>
             ) : (
               <>
-                <button className="xp-edit-btn" style={{ marginRight: '.5rem' }} onClick={() => navigate('/messages')}>
+                <button className="xp-edit-btn" style={{ marginRight: '.5rem' }} onClick={handleMessage}>
                   💬 Message
                 </button>
                 <button

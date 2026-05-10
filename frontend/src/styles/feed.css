@@ -718,3 +718,94 @@
 }
 .share-item:hover { background: rgba(255,255,255,.07); }
 .share-item svg { flex-shrink: 0; opacity: .8; }
+
+/* ── Compose: location tag ── */
+.compose-location-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  background: rgba(29,155,240,.1);
+  border: 1px solid rgba(29,155,240,.3);
+  color: #1d9bf0;
+  font-size: .8rem;
+  font-weight: 600;
+  padding: .3rem .75rem;
+  border-radius: 100px;
+  margin-bottom: .5rem;
+}
+.compose-location-tag svg { stroke: #1d9bf0; }
+
+/* ── Compose: active tool ── */
+.compose-tool-active { color: #1d9bf0 !important; }
+.compose-tool-active:hover { background: rgba(29,155,240,.1) !important; }
+
+/* ── Compose: GIF picker ── */
+.compose-gif-picker {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 320px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: .75rem;
+  z-index: 200;
+  box-shadow: 0 16px 48px rgba(0,0,0,.5);
+  animation: nbPanelIn .15s ease;
+}
+
+.compose-gif-search {
+  width: 100%;
+  padding: .55rem .9rem;
+  background: var(--surface-3);
+  border: 1.5px solid var(--border-sub);
+  border-radius: 100px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: .88rem;
+  color: var(--ink);
+  outline: none;
+  margin-bottom: .6rem;
+  transition: border-color .2s;
+}
+.compose-gif-search:focus { border-color: rgba(201,168,76,.4); }
+.compose-gif-search::placeholder { color: var(--muted); }
+
+.compose-gif-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.compose-gif-item {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity .15s, transform .15s;
+}
+.compose-gif-item:hover { opacity: .85; transform: scale(1.03); }
+
+@media (max-width: 768px) {
+  .compose-gif-picker {
+    position: fixed;
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+    left: 0;
+    right: 0;
+    width: 100%;
+    border-radius: 20px 20px 0 0;
+  }
+}
+
+/* ── Post location tag ── */
+.xpost-location {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  font-size: .75rem;
+  color: #1d9bf0;
+  margin-bottom: .5rem;
+}
+.xpost-location svg { stroke: #1d9bf0; flex-shrink: 0; }

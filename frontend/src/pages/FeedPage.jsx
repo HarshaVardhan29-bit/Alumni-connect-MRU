@@ -109,75 +109,130 @@ function WhoToConnect() {
 
 export default function FeedPage() {
   const { user } = useAuth();
-  const [allPosts, setAllPosts]           = useState([]);
+  const [allPosts, setAllPosts]             = useState([]);
   const [followingPosts, setFollowingPosts] = useState([]);
   const [trendingPosts, setTrendingPosts]   = useState([]);
-  const [text, setText]       = useState('');
-  const [loading, setLoading] = useState(true);
+  const [text, setText]         = useState('');
+  const [loading, setLoading]   = useState(true);
   const [tabLoading, setTabLoading] = useState(false);
-  const [posting, setPosting] = useState(false);
-  const [tab, setTab]         = useState('for-you');
+  const [posting, setPosting]   = useState(false);
+  const [tab, setTab]           = useState('for-you');
   const [showEmoji, setShowEmoji] = useState(false);
-  const [images, setImages]   = useState([]);
-  const [focused, setFocused] = useState(false);
-  const fileRef = useRef();
+  const [showGif, setShowGif]   = useState(false);
+  const [gifSearch, setGifSearch] = useState('');
+  const [gifs, setGifs]         = useState([]);
+  const [gifLoading, setGifLoading] = useState(false);
+  const [showLocation, setShowLocation] = useState(false);
+  const [location, setLocation] = useState(null);
+  const [locLoading, setLocLoading] = useState(false);
+  const [images, setImages]     = useState([]); // { type, url, name? }
+  const [focused, setFocused]   = useState(false);
+  const fileRef    = useRef();
+  const videoRef   = useRef();
+  const gifInputRef = useRef();
   const MAX = 280;
 
   // Load "For You" on mount
   useEffect(() => {
     api.get('/posts').then(r => setAllPosts(r.data)).catch(console.error).finally(() => setLoading(false));
-    const close = () => setShowEmoji(false);
+    const close = () => { setShowEmoji(false); setShowGif(false); };
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, []);
 
-  // Load tab data on switch (lazy — only fetch once)
+  // Load tab data on switch
   useEffect(() => {
     if (tab === 'following' && followingPosts.length === 0) {
       setTabLoading(true);
-      api.get('/posts/following')
-        .then(r => setFollowingPosts(r.data))
-        .catch(console.error)
-        .finally(() => setTabLoading(false));
+      api.get('/posts/following').then(r => setFollowingPosts(r.data)).catch(console.error).finally(() => setTabLoading(false));
     }
     if (tab === 'trending' && trendingPosts.length === 0) {
       setTabLoading(true);
-      api.get('/posts/trending')
-        .then(r => setTrendingPosts(r.data))
-        .catch(console.error)
-        .finally(() => setTabLoading(false));
+      api.get('/posts/trending').then(r => setTrendingPosts(r.data)).catch(console.error).finally(() => setTabLoading(false));
     }
   }, [tab]);
 
-  // Derive the active post list
   const activePosts = tab === 'for-you' ? allPosts : tab === 'following' ? followingPosts : trendingPosts;
   const isLoading   = loading || tabLoading;
 
+  // ── Media handlers ──
   const handleImagePick = (e) => {
     const files = Array.from(e.target.files).slice(0, 4 - images.length);
     files.forEach(f => {
-      if (f.size > 2 * 1024 * 1024) return;
+      if (f.size > 5 * 1024 * 1024) return;
       const reader = new FileReader();
-      reader.onload = ev => setImages(prev => [...prev, ev.target.result].slice(0, 4));
+      reader.onload = ev => setImages(prev => [...prev, { type: 'image', url: ev.target.result }].slice(0, 4));
       reader.readAsDataURL(f);
     });
     e.target.value = '';
   };
 
-  const removeImage = (i) => setImages(prev => prev.filter((_, idx) => idx !== i));
+  const handleVideoPick = (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    if (f.size > 50 * 1024 * 1024) { alert('Video too large. Max 50MB.'); return; }
+    const reader = new FileReader();
+    reader.onload = ev => setImages([{ type: 'video', url: ev.target.result, name: f.name }]);
+    reader.readAsDataURL(f);
+    e.target.value = '';
+  };
 
+  const removeMedia = (i) => setImages(prev => prev.filter((_, idx) => idx !== i));
+
+  // ── GIF search via Tenor (free, no key needed for basic) ──
+  const searchGifs = async (q) => {
+    if (!q.trim()) { setGifs([]); return; }
+    setGifLoading(true);
+    try {
+      const r = await fetch(`https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(q)}&key=AIzaSyAyimkuYQYF_FXVALexPzkcsvZpe5LHs8A&limit=12&media_filter=gif`);
+      const d = await r.json();
+      setGifs(d.results || []);
+    } catch { setGifs([]); }
+    finally { setGifLoading(false); }
+  };
+
+  const pickGif = (gif) => {
+    const url = gif.media_formats?.gif?.url || gif.media_formats?.tinygif?.url;
+    if (url) setImages([{ type: 'gif', url }]);
+    setShowGif(false);
+    setGifs([]);
+    setGifSearch('');
+  };
+
+  // ── Location ──
+  const getLocation = () => {
+    setLocLoading(true);
+    navigator.geolocation?.getCurrentPosition(
+      async ({ coords }) => {
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${coords.latitude}&lon=${coords.longitude}&format=json`);
+          const d = await r.json();
+          const city = d.address?.city || d.address?.town || d.address?.village || d.display_name?.split(',')[0];
+          setLocation({ lat: coords.latitude, lon: coords.longitude, city });
+        } catch {
+          setLocation({ lat: coords.latitude, lon: coords.longitude, city: `${coords.latitude.toFixed(3)}, ${coords.longitude.toFixed(3)}` });
+        }
+        setLocLoading(false);
+        setShowLocation(false);
+      },
+      () => { alert('Location access denied.'); setLocLoading(false); }
+    );
+  };
+
+  // ── Submit ──
   const submit = async (e) => {
     e.preventDefault();
     if (!text.trim() && images.length === 0) return;
     if (text.length > MAX) return;
     setPosting(true);
     try {
-      const media = images.map(url => ({ type: 'image', url }));
-      const res = await api.post('/posts', { text, media });
-      // Prepend to all-posts and switch to For You
+      const media = images.map(m => ({ type: m.type, url: m.url }));
+      const payload = { text, media };
+      if (location) payload.location = location;
+      const res = await api.post('/posts', payload);
       setAllPosts(p => [res.data, ...p]);
       setTab('for-you');
-      setText(''); setImages([]);
+      setText(''); setImages([]); setLocation(null);
     } catch (err) { alert(err.response?.data?.message || 'Failed to post'); }
     finally { setPosting(false); }
   };
@@ -223,15 +278,55 @@ export default function FeedPage() {
                 rows={focused || text ? 3 : 1}
               />
 
-              {/* Image previews */}
+              {/* Media previews */}
               {images.length > 0 && (
                 <div className={`compose-img-grid compose-img-${images.length}`}>
-                  {images.map((src, i) => (
+                  {images.map((m, i) => (
                     <div key={i} className="compose-img-wrap">
-                      <img src={src} alt="" className="compose-img-preview" />
-                      <button type="button" className="compose-img-remove" onClick={() => removeImage(i)}>✕</button>
+                      {m.type === 'video'
+                        ? <video src={m.url} className="compose-img-preview" controls style={{ objectFit: 'cover' }} />
+                        : <img src={m.url} alt="" className="compose-img-preview" />
+                      }
+                      <button type="button" className="compose-img-remove" onClick={() => removeMedia(i)}>✕</button>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Location tag */}
+              {location && (
+                <div className="compose-location-tag">
+                  <LocIcon /> {location.city}
+                  <button type="button" onClick={() => setLocation(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', marginLeft: '.4rem' }}>✕</button>
+                </div>
+              )}
+
+              {/* GIF picker */}
+              {showGif && (
+                <div className="compose-gif-picker" onClick={e => e.stopPropagation()}>
+                  <input
+                    ref={gifInputRef}
+                    className="compose-gif-search"
+                    placeholder="Search GIFs..."
+                    value={gifSearch}
+                    onChange={e => { setGifSearch(e.target.value); searchGifs(e.target.value); }}
+                    autoFocus
+                  />
+                  {gifLoading && <div style={{ padding: '.5rem', color: 'var(--muted)', fontSize: '.8rem' }}>Searching...</div>}
+                  <div className="compose-gif-grid">
+                    {gifs.map((g, i) => (
+                      <img
+                        key={i}
+                        src={g.media_formats?.tinygif?.url}
+                        alt={g.content_description}
+                        className="compose-gif-item"
+                        onClick={() => pickGif(g)}
+                      />
+                    ))}
+                  </div>
+                  {!gifLoading && gifs.length === 0 && gifSearch && (
+                    <div style={{ padding: '.5rem', color: 'var(--muted)', fontSize: '.8rem' }}>No GIFs found</div>
+                  )}
                 </div>
               )}
 
@@ -239,15 +334,23 @@ export default function FeedPage() {
               <div className="compose-toolbar">
                 <div className="compose-tools">
                   {/* Image */}
-                  <button type="button" className="compose-tool" title="Add image" onClick={() => fileRef.current?.click()}>
+                  <button type="button" className="compose-tool" title="Add image/video" onClick={() => fileRef.current?.click()}>
                     <ImgIcon />
                   </button>
                   <input ref={fileRef} type="file" accept="image/*" multiple style={{ display:'none' }} onChange={handleImagePick} />
 
-                  {/* GIF — visual only */}
-                  <button type="button" className="compose-tool" title="Add GIF">
-                    <GifIcon />
+                  {/* Video */}
+                  <button type="button" className="compose-tool" title="Add video" onClick={() => videoRef.current?.click()}>
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
                   </button>
+                  <input ref={videoRef} type="file" accept="video/*" style={{ display:'none' }} onChange={handleVideoPick} />
+
+                  {/* GIF */}
+                  <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
+                    <button type="button" className="compose-tool" title="Add GIF" onClick={() => { setShowGif(s => !s); setShowEmoji(false); }}>
+                      <GifIcon />
+                    </button>
+                  </div>
 
                   {/* Poll — visual only */}
                   <button type="button" className="compose-tool" title="Add poll">
@@ -256,7 +359,7 @@ export default function FeedPage() {
 
                   {/* Emoji */}
                   <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
-                    <button type="button" className="compose-tool" title="Add emoji" onClick={() => setShowEmoji(s => !s)}>
+                    <button type="button" className="compose-tool" title="Add emoji" onClick={() => { setShowEmoji(s => !s); setShowGif(false); }}>
                       <EmojiIcon />
                     </button>
                     {showEmoji && (
@@ -267,8 +370,14 @@ export default function FeedPage() {
                     )}
                   </div>
 
-                  {/* Location — visual only */}
-                  <button type="button" className="compose-tool" title="Add location">
+                  {/* Location */}
+                  <button
+                    type="button"
+                    className={`compose-tool${location ? ' compose-tool-active' : ''}`}
+                    title="Add location"
+                    onClick={() => { if (location) setLocation(null); else getLocation(); }}
+                    disabled={locLoading}
+                  >
                     <LocIcon />
                   </button>
                 </div>

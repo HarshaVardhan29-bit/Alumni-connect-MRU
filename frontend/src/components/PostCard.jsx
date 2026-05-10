@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useSocket } from '../context/SocketContext';
 import Avatar from './Avatar';
 import api from '../api/axios';
 
@@ -93,6 +94,7 @@ function ShareMenu({ postId, onClose }) {
 /* ── Main PostCard ── */
 export default function PostCard({ post, onDelete, onReply }) {
   const { user } = useAuth();
+  const { postLikeEvent, postRetweetEvent } = useSocket();
   const navigate = useNavigate();
   const uid = user?.id || user?._id;
 
@@ -100,6 +102,7 @@ export default function PostCard({ post, onDelete, onReply }) {
   const [likeCount,  setLikeCount] = useState(post.likes?.length || 0);
   const [retweeted,  setRetweeted] = useState(post.retweets?.map(String).includes(String(uid)));
   const [rtCount,    setRtCount]   = useState(post.retweets?.length || 0);
+  const [replyCount, setReplyCount] = useState(post.replies?.length || 0);
   const [bookmarked, setBookmarked] = useState(false);
   const [replying,   setReplying]  = useState(false);
   const [replyText,  setReplyText] = useState('');
@@ -108,13 +111,27 @@ export default function PostCard({ post, onDelete, onReply }) {
   const [lightbox,   setLightbox]  = useState(null);
   const [showShare,  setShowShare] = useState(false);
 
-  // Load saved state from server once on mount
+  // Load saved state from localStorage on mount
   useEffect(() => {
     const saved = JSON.parse(localStorage.getItem('savedPosts') || '[]');
-    if (saved.includes(String(post._id))) {
-      setBookmarked(true);
-    }
+    if (saved.includes(String(post._id))) setBookmarked(true);
   }, [post._id]);
+
+  // Real-time like updates from other users
+  useEffect(() => {
+    if (!postLikeEvent) return;
+    if (String(postLikeEvent.postId) !== String(post._id)) return;
+    if (String(postLikeEvent.userId) === String(uid)) return; // skip own actions
+    setLikeCount(postLikeEvent.likes);
+  }, [postLikeEvent]);
+
+  // Real-time retweet updates from other users
+  useEffect(() => {
+    if (!postRetweetEvent) return;
+    if (String(postRetweetEvent.postId) !== String(post._id)) return;
+    if (String(postRetweetEvent.userId) === String(uid)) return;
+    setRtCount(postRetweetEvent.retweets);
+  }, [postRetweetEvent]);
 
   const isOwn = String(post.author?._id) === String(uid);
   const TRUNCATE = 240;
@@ -156,6 +173,7 @@ export default function PostCard({ post, onDelete, onReply }) {
     try {
       const res = await api.post('/posts', { text: replyText, replyTo: post._id });
       onReply?.(post._id, res.data);
+      setReplyCount(c => c + 1);
       setReplyText(''); setReplying(false);
     } catch {}
     finally { setSending(false); }
@@ -238,15 +256,18 @@ export default function PostCard({ post, onDelete, onReply }) {
             )}
           </p>
 
+          {post.location?.city && (
+            <div className="xpost-location">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              {post.location.city}
+            </div>
+          )}
+
           {post.media?.length > 0 && (
             <div className={`xpost-media xpost-media-${Math.min(post.media.length, 4)}`} onClick={e => e.stopPropagation()}>
               {post.media.map((m, i) => (
                 m.type === 'video'
-                  ? <div key={i} className="xpost-media-video">
-                      <iframe src={m.url} title="video" frameBorder="0"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen />
-                    </div>
+                  ? <video key={i} src={m.url} controls className="xpost-media-img" style={{ objectFit: 'cover', background: '#000' }} />
                   : <img key={i} src={m.url} alt="" className="xpost-media-img" loading="lazy"
                       style={{ cursor: 'zoom-in' }}
                       onClick={e => { e.stopPropagation(); setLightbox({ images: imageUrls, index: i }); }}
@@ -258,7 +279,7 @@ export default function PostCard({ post, onDelete, onReply }) {
           <div className="xpost-actions" onClick={e => e.stopPropagation()}>
             <button className="xpost-act reply-act" onClick={e => { e.stopPropagation(); setReplying(r => !r); }}>
               <span className="xpost-act-icon"><ReplyIcon /></span>
-              {post.replies?.length > 0 && <span className="xpost-act-count">{fmt(post.replies.length)}</span>}
+              {replyCount > 0 && <span className="xpost-act-count">{fmt(replyCount)}</span>}
             </button>
 
             <button className={`xpost-act rt-act${retweeted ? ' active' : ''}`} onClick={toggleRetweet}>

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
 
@@ -7,14 +7,16 @@ const SocketContext = createContext(null);
 export function SocketProvider({ children }) {
   const { user } = useAuth();
   const socketRef = useRef(null);
+  // Real-time post update events — components subscribe to these
+  const [postLikeEvent,    setPostLikeEvent]    = useState(null);
+  const [postRetweetEvent, setPostRetweetEvent] = useState(null);
+  const [postNewEvent,     setPostNewEvent]     = useState(null);
 
   useEffect(() => {
     if (!user) return;
 
-    // In production, frontend is served from the same Express server
-    // so we connect to the same origin. In dev, connect to localhost:5001.
     const SOCKET_URL = import.meta.env.VITE_API_URL === '/api'
-      ? window.location.origin          // same-origin (production)
+      ? window.location.origin
       : (import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5001');
 
     const socket = io(SOCKET_URL);
@@ -22,24 +24,26 @@ export function SocketProvider({ children }) {
 
     const uid = user._id || user.id;
 
-    // Join personal room immediately on connect (and on reconnect)
-    const joinRoom = () => {
-      socket.emit('join_user', uid);
-    };
-
+    const joinRoom = () => socket.emit('join_user', uid);
     socket.on('connect', joinRoom);
-
-    // If already connected by the time listener is added
     if (socket.connected) joinRoom();
+
+    // ── Real-time post events ──
+    socket.on('post:liked', (data) => setPostLikeEvent(data));
+    socket.on('post:retweeted', (data) => setPostRetweetEvent(data));
+    socket.on('post:new', (data) => setPostNewEvent(data));
 
     return () => {
       socket.off('connect', joinRoom);
+      socket.off('post:liked');
+      socket.off('post:retweeted');
+      socket.off('post:new');
       socket.disconnect();
     };
   }, [user?._id || user?.id]);
 
   return (
-    <SocketContext.Provider value={socketRef}>
+    <SocketContext.Provider value={{ socketRef, postLikeEvent, postRetweetEvent, postNewEvent }}>
       {children}
     </SocketContext.Provider>
   );

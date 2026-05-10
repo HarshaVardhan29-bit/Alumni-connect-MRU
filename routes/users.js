@@ -73,29 +73,37 @@ router.post('/:id/follow', protect, async (req, res) => {
     const targetId = String(req.params.id);
     const alreadyFollowing = req.user.following?.map(String).includes(targetId);
     const requestPending = target.followRequests?.map(String).includes(myId);
+    const io = req.app.get('io');
 
     if (alreadyFollowing) {
-      // Unfollow
       await User.findByIdAndUpdate(myId,    { $pull: { following: targetId } });
       await User.findByIdAndUpdate(targetId, { $pull: { followers: myId } });
+      io?.to(`user_${targetId}`).emit('user:unfollowed', { userId: myId });
       return res.json({ following: false, requested: false });
     }
 
     if (requestPending) {
-      // Cancel follow request
       await User.findByIdAndUpdate(targetId, { $pull: { followRequests: myId } });
       return res.json({ following: false, requested: false });
     }
 
     if (target.isPrivate) {
-      // Send follow request
       await User.findByIdAndUpdate(targetId, { $addToSet: { followRequests: myId } });
+      // Notify target of follow request
+      io?.to(`user_${targetId}`).emit('user:follow_request', {
+        userId: myId,
+        name: `${req.user.firstName} ${req.user.lastName}`,
+      });
       return res.json({ following: false, requested: true });
     }
 
     // Public account — follow directly
     await User.findByIdAndUpdate(myId,    { $addToSet: { following: targetId } });
     await User.findByIdAndUpdate(targetId, { $addToSet: { followers: myId } });
+    io?.to(`user_${targetId}`).emit('user:followed', {
+      userId: myId,
+      name: `${req.user.firstName} ${req.user.lastName}`,
+    });
     return res.json({ following: true, requested: false });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });

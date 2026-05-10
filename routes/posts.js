@@ -131,6 +131,7 @@ router.put('/:id/save', protect, async (req, res) => {
 router.put('/:id/like', protect, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).json({ message: 'Post not found' });
     const liked = post.likes.map(String).includes(String(req.user._id));
     if (liked) post.likes.pull(req.user._id);
     else {
@@ -144,6 +145,13 @@ router.put('/:id/like', protect, async (req, res) => {
       }
     }
     await post.save();
+    // Broadcast real-time like update to all connected clients
+    req.app.get('io')?.emit('post:liked', {
+      postId: post._id,
+      likes: post.likes.length,
+      liked: !liked,
+      userId: req.user._id,
+    });
     res.json({ likes: post.likes.length, liked: !liked });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -152,6 +160,7 @@ router.put('/:id/like', protect, async (req, res) => {
 router.put('/:id/retweet', protect, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).json({ message: 'Post not found' });
     const retweeted = post.retweets.map(String).includes(String(req.user._id));
     if (retweeted) post.retweets.pull(req.user._id);
     else {
@@ -165,6 +174,13 @@ router.put('/:id/retweet', protect, async (req, res) => {
       }
     }
     await post.save();
+    // Broadcast real-time retweet update
+    req.app.get('io')?.emit('post:retweeted', {
+      postId: post._id,
+      retweets: post.retweets.length,
+      retweeted: !retweeted,
+      userId: req.user._id,
+    });
     res.json({ retweets: post.retweets.length, retweeted: !retweeted });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
