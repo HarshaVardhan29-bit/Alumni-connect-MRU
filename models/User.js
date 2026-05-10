@@ -41,7 +41,8 @@ const userSchema = new mongoose.Schema(
     following:  [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     followers:  [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     followRequests: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // pending follow requests
-    // Saved posts
+    // Saved posts — DEPRECATED: use Bookmark collection instead
+    // Kept for migration compatibility only
     savedPosts: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Post' }],
     // Privacy settings
     isPrivate: { type: Boolean, default: false }, // private account requires follow approval

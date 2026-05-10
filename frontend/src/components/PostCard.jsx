@@ -96,20 +96,33 @@ export default function PostCard({ post, onDelete, onReply }) {
   const { user, updateUser } = useAuth();
   const { postLikeEvent, postRetweetEvent } = useSocket();
   const navigate = useNavigate();
-  // Always prefer _id, fall back to id — consistent across all login methods
   const uid = user?._id || user?.id;
 
-  // Derive initial bookmark state from user.savedPosts (works on any device, no localStorage needed)
-  const isSavedInitially = Array.isArray(user?.savedPosts)
-    ? user.savedPosts.map(String).includes(String(post._id))
-    : JSON.parse(localStorage.getItem('savedPosts') || '[]').includes(String(post._id));
+  // New API returns liked/retweeted/bookmarked booleans directly
+  // Legacy: check arrays for backward compat
+  const initLiked = post.liked !== undefined
+    ? post.liked
+    : (post.likes?.map ? post.likes.map(String).includes(String(uid)) : false);
+  const initRetweeted = post.retweeted !== undefined
+    ? post.retweeted
+    : (post.retweets?.map ? post.retweets.map(String).includes(String(uid)) : false);
+  const initBookmarked = post.bookmarked !== undefined
+    ? post.bookmarked
+    : (Array.isArray(user?.savedPosts)
+        ? user.savedPosts.map(String).includes(String(post._id))
+        : JSON.parse(localStorage.getItem('savedPosts') || '[]').includes(String(post._id)));
 
-  const [liked,      setLiked]     = useState(post.likes?.map(String).includes(String(uid)));
-  const [likeCount,  setLikeCount] = useState(post.likes?.length || 0);
-  const [retweeted,  setRetweeted] = useState(post.retweets?.map(String).includes(String(uid)));
-  const [rtCount,    setRtCount]   = useState(post.retweets?.length || 0);
-  const [replyCount, setReplyCount] = useState(post.replies?.length || 0);
-  const [bookmarked, setBookmarked] = useState(isSavedInitially);
+  // New API uses count fields; legacy uses array lengths
+  const initLikeCount  = post.likesCount    !== undefined ? post.likesCount    : (post.likes?.length    || 0);
+  const initRtCount    = post.retweetsCount !== undefined ? post.retweetsCount : (post.retweets?.length  || 0);
+  const initReplyCount = post.repliesCount  !== undefined ? post.repliesCount  : (post.replies?.length   || 0);
+
+  const [liked,      setLiked]     = useState(initLiked);
+  const [likeCount,  setLikeCount] = useState(initLikeCount);
+  const [retweeted,  setRetweeted] = useState(initRetweeted);
+  const [rtCount,    setRtCount]   = useState(initRtCount);
+  const [replyCount, setReplyCount] = useState(initReplyCount);
+  const [bookmarked, setBookmarked] = useState(initBookmarked);
   const [replying,   setReplying]  = useState(false);
   const [replyText,  setReplyText] = useState('');
   const [sending,    setSending]   = useState(false);
@@ -117,15 +130,15 @@ export default function PostCard({ post, onDelete, onReply }) {
   const [lightbox,   setLightbox]  = useState(null);
   const [showShare,  setShowShare] = useState(false);
 
-  // Real-time like updates from other users
+  // Real-time like updates — only for users viewing this post (post_<id> room)
+  // These events are now targeted, not global broadcasts
   useEffect(() => {
     if (!postLikeEvent) return;
     if (String(postLikeEvent.postId) !== String(post._id)) return;
-    if (String(postLikeEvent.userId) === String(uid)) return; // skip own actions
+    if (String(postLikeEvent.userId) === String(uid)) return;
     setLikeCount(postLikeEvent.likes);
   }, [postLikeEvent]);
 
-  // Real-time retweet updates from other users
   useEffect(() => {
     if (!postRetweetEvent) return;
     if (String(postRetweetEvent.postId) !== String(post._id)) return;
@@ -183,20 +196,18 @@ export default function PostCard({ post, onDelete, onReply }) {
     e.stopPropagation();
     const next = !bookmarked;
     setBookmarked(next);
-    // Update user.savedPosts in context + localStorage (single source of truth)
-    const currentSaved = (user?.savedPosts || []).map(String);
-    const updatedSaved = next
-      ? [...new Set([...currentSaved, String(post._id)])]
-      : currentSaved.filter(id => id !== String(post._id));
-    updateUser({ savedPosts: updatedSaved });
-    localStorage.setItem('savedPosts', JSON.stringify(updatedSaved));
     try {
-      await api.put(`/posts/${post._id}/save`);
+      const r = await api.put(`/posts/${post._id}/save`);
+      setBookmarked(r.data.saved);
+      // Keep user.savedPosts in sync for PostCard initial state
+      const currentSaved = (user?.savedPosts || []).map(String);
+      const updatedSaved = r.data.saved
+        ? [...new Set([...currentSaved, String(post._id)])]
+        : currentSaved.filter(id => id !== String(post._id));
+      updateUser({ savedPosts: updatedSaved });
+      localStorage.setItem('savedPosts', JSON.stringify(updatedSaved));
     } catch {
-      // revert on failure
-      setBookmarked(!next);
-      updateUser({ savedPosts: currentSaved });
-      localStorage.setItem('savedPosts', JSON.stringify(currentSaved));
+      setBookmarked(!next); // revert
     }
   };
 

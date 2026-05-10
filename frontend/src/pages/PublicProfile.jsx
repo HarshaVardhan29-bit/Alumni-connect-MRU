@@ -43,8 +43,8 @@ export default function PublicProfile() {
       api.get('/mentorship/my'),
     ]).then(([pRes, postsRes, repliesRes, menRes]) => {
       setProfile(pRes.data);
-      setPosts(postsRes.data || []);
-      setReplies(repliesRes.data || []);
+      setPosts(postsRes.data?.posts || postsRes.data || []);
+      setReplies(repliesRes.data?.posts || repliesRes.data || []);
 
       // Check mentorship request
       const already = menRes.data.find(m =>

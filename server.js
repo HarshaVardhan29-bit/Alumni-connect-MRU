@@ -20,6 +20,7 @@ const compression = require('compression');
 require('dotenv').config();
 require('./utils/passport');
 const { startKeepAlive } = require('./utils/keepAlive');
+const { startScoreRecalculator } = require('./utils/scoreRecalculator');
 const {
   authenticateSocket,
   registerUser,
@@ -239,6 +240,7 @@ mongoose.connect(process.env.MONGO_URI, {
     server.listen(process.env.PORT || 5001, () => {
       console.log(`[Server] Running on port ${process.env.PORT || 5001}`);
       startKeepAlive();
+      startScoreRecalculator();
     });
   })
   .catch(err => {

@@ -99,48 +99,106 @@ function WhoToConnect() {
 
 export default function FeedPage() {
   const { user } = useAuth();
-  const [allPosts, setAllPosts]             = useState([]);
+  const [allPosts,       setAllPosts]       = useState([]);
   const [followingPosts, setFollowingPosts] = useState([]);
-  const [trendingPosts, setTrendingPosts]   = useState([]);
-  const [text, setText]         = useState('');
-  const [loading, setLoading]   = useState(true);
-  const [tabLoading, setTabLoading] = useState(false);
-  const [posting, setPosting]   = useState(false);
-  const [tab, setTab]           = useState('for-you');
+  const [trendingPosts,  setTrendingPosts]  = useState([]);
+  const [cursors,        setCursors]        = useState({ 'for-you': null, following: null, trending: null });
+  const [hasMore,        setHasMore]        = useState({ 'for-you': true, following: true, trending: true });
+  const [text,      setText]      = useState('');
+  const [loading,   setLoading]   = useState(true);
+  const [tabLoading,setTabLoading]= useState(false);
+  const [loadingMore,setLoadingMore]=useState(false);
+  const [posting,   setPosting]   = useState(false);
+  const [tab,       setTab]       = useState('for-you');
   const [showEmoji, setShowEmoji] = useState(false);
-  const [showGif, setShowGif]   = useState(false);
+  const [showGif,   setShowGif]   = useState(false);
   const [gifSearch, setGifSearch] = useState('');
-  const [gifs, setGifs]         = useState([]);
-  const [gifLoading, setGifLoading] = useState(false);
-  const [showLocation, setShowLocation] = useState(false);
-  const [location, setLocation] = useState(null);
-  const [locLoading, setLocLoading] = useState(false);
-  const [images, setImages]     = useState([]); // { type, url, name? }
-  const [focused, setFocused]   = useState(false);
-  const fileRef    = useRef();
-  const videoRef   = useRef();
+  const [gifs,      setGifs]      = useState([]);
+  const [gifLoading,setGifLoading]= useState(false);
+  const [showLocation,setShowLocation]=useState(false);
+  const [location,  setLocation]  = useState(null);
+  const [locLoading,setLocLoading]= useState(false);
+  const [images,    setImages]    = useState([]);
+  const [focused,   setFocused]   = useState(false);
+  const fileRef     = useRef();
+  const videoRef    = useRef();
   const gifInputRef = useRef();
+  const loaderRef   = useRef(); // intersection observer target
   const MAX = 280;
 
-  // Load "For You" on mount
+  // ── Feed URL map ──
+  const feedUrl = (t, cursor) => {
+    const base = t === 'for-you' ? '/posts' : t === 'following' ? '/posts/following' : '/posts/trending';
+    return cursor ? `${base}?cursor=${cursor}&limit=20` : `${base}?limit=20`;
+  };
+
+  // ── Extract posts from response (handles both old array and new {posts, nextCursor} format) ──
+  const extractPosts = (data) => {
+    if (Array.isArray(data)) return { posts: data, nextCursor: null, hasMore: false };
+    return { posts: data.posts || [], nextCursor: data.nextCursor || null, hasMore: data.hasMore || false };
+  };
+
+  // ── Initial load ──
   useEffect(() => {
-    api.get('/posts').then(r => setAllPosts(r.data)).catch(console.error).finally(() => setLoading(false));
+    setLoading(true);
+    api.get(feedUrl('for-you', null))
+      .then(r => {
+        const { posts, nextCursor, hasMore: hm } = extractPosts(r.data);
+        setAllPosts(posts);
+        setCursors(c => ({ ...c, 'for-you': nextCursor }));
+        setHasMore(h => ({ ...h, 'for-you': hm }));
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+
     const close = () => { setShowEmoji(false); setShowGif(false); };
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, []);
 
-  // Load tab data on switch
+  // ── Tab switch — load if not loaded yet ──
   useEffect(() => {
-    if (tab === 'following' && followingPosts.length === 0) {
-      setTabLoading(true);
-      api.get('/posts/following').then(r => setFollowingPosts(r.data)).catch(console.error).finally(() => setTabLoading(false));
-    }
-    if (tab === 'trending' && trendingPosts.length === 0) {
-      setTabLoading(true);
-      api.get('/posts/trending').then(r => setTrendingPosts(r.data)).catch(console.error).finally(() => setTabLoading(false));
-    }
+    if (tab === 'for-you') return;
+    const posts = tab === 'following' ? followingPosts : trendingPosts;
+    if (posts.length > 0) return; // already loaded
+    setTabLoading(true);
+    api.get(feedUrl(tab, null))
+      .then(r => {
+        const { posts: p, nextCursor, hasMore: hm } = extractPosts(r.data);
+        if (tab === 'following') setFollowingPosts(p);
+        else setTrendingPosts(p);
+        setCursors(c => ({ ...c, [tab]: nextCursor }));
+        setHasMore(h => ({ ...h, [tab]: hm }));
+      })
+      .catch(console.error)
+      .finally(() => setTabLoading(false));
   }, [tab]);
+
+  // ── Infinite scroll — load more ──
+  const loadMore = async () => {
+    if (loadingMore || !hasMore[tab] || !cursors[tab]) return;
+    setLoadingMore(true);
+    try {
+      const r = await api.get(feedUrl(tab, cursors[tab]));
+      const { posts: newPosts, nextCursor, hasMore: hm } = extractPosts(r.data);
+      if (tab === 'for-you')    setAllPosts(p => [...p, ...newPosts]);
+      if (tab === 'following')  setFollowingPosts(p => [...p, ...newPosts]);
+      if (tab === 'trending')   setTrendingPosts(p => [...p, ...newPosts]);
+      setCursors(c => ({ ...c, [tab]: nextCursor }));
+      setHasMore(h => ({ ...h, [tab]: hm }));
+    } catch {}
+    setLoadingMore(false);
+  };
+
+  // ── Intersection Observer for infinite scroll ──
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      entries => { if (entries[0].isIntersecting) loadMore(); },
+      { threshold: 0.1 }
+    );
+    if (loaderRef.current) observer.observe(loaderRef.current);
+    return () => observer.disconnect();
+  }, [tab, cursors, hasMore, loadingMore]);
 
   const activePosts = tab === 'for-you' ? allPosts : tab === 'following' ? followingPosts : trendingPosts;
   const isLoading   = loading || tabLoading;
@@ -233,8 +291,11 @@ export default function FeedPage() {
     setTrendingPosts(p => p.filter(x => x._id !== id));
   };
 
-  const handleReply = (postId, reply) => {
-    const updater = p => p.map(x => x._id === postId ? { ...x, replies: [...(x.replies||[]), reply] } : x);
+  const handleReply = (postId) => {
+    const updater = p => p.map(x => x._id === postId
+      ? { ...x, repliesCount: (x.repliesCount || 0) + 1 }
+      : x
+    );
     setAllPosts(updater);
     setFollowingPosts(updater);
     setTrendingPosts(updater);
@@ -406,7 +467,16 @@ export default function FeedPage() {
               <div className="empty-state"><div className="empty-icon">📭</div><h3>No posts yet</h3><p>Be the first to share something.</p></div>
             )
           ) : (
-            activePosts.map(post => <PostCard key={post._id} post={post} onDelete={handleDelete} onReply={handleReply} />)
+            <>
+              {activePosts.map(post => <PostCard key={post._id} post={post} onDelete={handleDelete} onReply={handleReply} />)}
+              {/* Infinite scroll trigger */}
+              <div ref={loaderRef} style={{ height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {loadingMore && <div className="feed-loading" style={{ padding: '.5rem' }}>Loading more…</div>}
+                {!hasMore[tab] && activePosts.length > 0 && (
+                  <div style={{ fontSize: '.75rem', color: 'var(--muted)', padding: '1rem' }}>You're all caught up ✓</div>
+                )}
+              </div>
+            </>
           )}
         </div>
 

@@ -274,17 +274,17 @@ export default function ProfilePage() {
         api.get(`/posts/user/${uid}/replies`),
       ]).then(([meRes, postsRes, repliesRes]) => {
         setLocalUser(prev => ({ ...prev, ...meRes.data }));
-        setPosts(postsRes.data || []);
-        setReplies(repliesRes.data || []);
+        // Handle both old array format and new {posts, nextCursor} format
+        setPosts(postsRes.data?.posts || postsRes.data || []);
+        setReplies(repliesRes.data?.posts || repliesRes.data || []);
       }).catch(err => {
         console.error('Profile load error:', err);
-        // Still show posts even if /users/me fails
         Promise.all([
           api.get(`/posts/user/${uid}`),
           api.get(`/posts/user/${uid}/replies`),
         ]).then(([postsRes, repliesRes]) => {
-          setPosts(postsRes.data || []);
-          setReplies(repliesRes.data || []);
+          setPosts(postsRes.data?.posts || postsRes.data || []);
+          setReplies(repliesRes.data?.posts || repliesRes.data || []);
         }).catch(() => {});
       }).finally(() => setLoading(false));
     } else {
@@ -296,14 +296,12 @@ export default function ProfilePage() {
         api.get('/mentorship/my'),
       ]).then(([pRes, postsRes, repliesRes, menRes]) => {
         setProfileData(pRes.data);
-        setPosts(postsRes.data || []);
-        setReplies(repliesRes.data || []);
-        // Check mentorship
+        setPosts(postsRes.data?.posts || postsRes.data || []);
+        setReplies(repliesRes.data?.posts || repliesRes.data || []);
         const already = menRes.data.find(m =>
           (m.alumni?._id === id || m.alumni === id) && ['pending','accepted'].includes(m.status)
         );
         if (already) setRequested(true);
-        // Check follow status using local user data (no extra API call needed)
         setFollowing(user.following?.map(String).includes(String(id)) || false);
         setFollowReq(pRes.data.followRequests?.map(String).includes(String(uid)) || false);
       }).catch(err => {

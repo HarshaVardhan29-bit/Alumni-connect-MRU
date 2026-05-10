@@ -4,20 +4,36 @@ import PostCard from '../components/PostCard';
 import api from '../api/axios';
 
 export default function SavedPostsPage() {
-  const [posts, setPosts]   = useState([]);
+  const [posts,   setPosts]   = useState([]);
   const [loading, setLoading] = useState(true);
+  const [cursor,  setCursor]  = useState(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const load = async (cur = null) => {
+    try {
+      const url = cur ? `/posts/bookmarks?cursor=${cur}&limit=20` : '/posts/bookmarks?limit=20';
+      const r = await api.get(url);
+      const data = r.data;
+      // Handle both old array format and new {posts, nextCursor} format
+      const newPosts = data.posts || data || [];
+      if (cur) setPosts(p => [...p, ...newPosts]);
+      else setPosts(newPosts);
+      setCursor(data.nextCursor || null);
+      setHasMore(data.hasMore || false);
+    } catch {}
+  };
 
   useEffect(() => {
-    api.get('/posts/saved/list')
-      .then(r => {
-        setPosts(r.data);
-        // sync localStorage so PostCard bookmark icons are accurate
-        const ids = r.data.map(p => String(p._id));
-        localStorage.setItem('savedPosts', JSON.stringify(ids));
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    load(null).finally(() => setLoading(false));
   }, []);
+
+  const loadMore = async () => {
+    if (loadingMore || !hasMore || !cursor) return;
+    setLoadingMore(true);
+    await load(cursor);
+    setLoadingMore(false);
+  };
 
   const handleUnsave = (pid) => setPosts(ps => ps.filter(p => p._id !== pid));
 
@@ -46,13 +62,27 @@ export default function SavedPostsPage() {
             <div style={{ fontSize: '.9rem' }}>Tap the bookmark icon on any post to save it here.</div>
           </div>
         ) : (
-          posts.map(p => (
-            <PostCard
-              key={p._id}
-              post={p}
-              onDelete={handleUnsave}
-            />
-          ))
+          <>
+            {posts.map(p => (
+              <PostCard key={p._id} post={p} onDelete={handleUnsave} />
+            ))}
+            {hasMore && (
+              <div style={{ textAlign: 'center', padding: '1rem' }}>
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  style={{ fontSize: '.82rem', color: '#a78bfa', background: 'rgba(124,69,184,.1)', border: '1px solid rgba(124,69,184,.2)', borderRadius: 20, padding: '.4rem 1.2rem', cursor: 'pointer', fontFamily: 'DM Sans,sans-serif' }}
+                >
+                  {loadingMore ? 'Loading…' : 'Load more'}
+                </button>
+              </div>
+            )}
+            {!hasMore && posts.length > 0 && (
+              <div style={{ textAlign: 'center', padding: '1rem', fontSize: '.75rem', color: 'var(--muted)' }}>
+                All saved posts loaded ✓
+              </div>
+            )}
+          </>
         )}
       </div>
     </DashLayout>

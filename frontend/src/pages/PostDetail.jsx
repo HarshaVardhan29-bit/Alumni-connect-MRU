@@ -18,11 +18,26 @@ export default function PostDetail() {
   }, [id]);
 
   const handleDelete = () => navigate('/feed');
-  const handleReply = (_, newReply) => {
-    setData(d => d ? { ...d, replies: [...d.replies, newReply] } : d);
+  const handleReply = (postId, newReply) => {
+    setData(d => {
+      if (!d) return d;
+      // If reply to the main post
+      if (String(postId) === String(d.post?._id)) {
+        return {
+          ...d,
+          post: { ...d.post, repliesCount: (d.post.repliesCount || 0) + 1 },
+          replies: newReply ? [...d.replies, newReply] : d.replies,
+        };
+      }
+      return d;
+    });
   };
   const handleDeleteReply = (rid) => {
-    setData(d => d ? { ...d, replies: d.replies.filter(r => r._id !== rid) } : d);
+    setData(d => d ? {
+      ...d,
+      post: { ...d.post, repliesCount: Math.max(0, (d.post.repliesCount || 1) - 1) },
+      replies: d.replies.filter(r => r._id !== rid),
+    } : d);
   };
 
   return (

@@ -58,7 +58,11 @@ router.get('/:convId', protect, async (req, res) => {
     const after  = req.query.after;  // messageId — load newer messages (reconnect sync)
 
     let query = {
-      conversationId: req.params.convId,
+      // Support both old 'mentorship' field and new 'conversationId' field
+      $or: [
+        { conversationId: req.params.convId },
+        { mentorship: req.params.convId },
+      ],
       deletedFor: { $ne: req.user._id },
     };
 
