@@ -1,108 +1,105 @@
-const express = require('express');
-const http = require('http');
-const path = require('path');
+/**
+ * MRU Alumni Network — Production Server
+ * 
+ * Socket Architecture: User-room based
+ * - Each user joins ONE room: "user_<userId>"
+ * - No conversation rooms needed
+ * - Messages routed via recipient's user room
+ * - Scales to thousands of conversations
+ */
+
+const express    = require('express');
+const http       = require('http');
+const path       = require('path');
 const { Server } = require('socket.io');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const mongoose   = require('mongoose');
+const cors       = require('cors');
+const helmet     = require('helmet');
+const rateLimit  = require('express-rate-limit');
 const compression = require('compression');
 require('dotenv').config();
-require('./utils/passport'); // initialize passport strategies
+require('./utils/passport');
 const { startKeepAlive } = require('./utils/keepAlive');
+const {
+  authenticateSocket,
+  registerUser,
+  handleDisconnect,
+  handleTyping,
+  isUserOnline,
+} = require('./utils/socketManager');
 
-const app = express();
+const app    = express();
 const server = http.createServer(app);
 const isProd = process.env.NODE_ENV === 'production';
 
+// ── CORS ─────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:5174',
   process.env.FRONTEND_URL,
-  // Support multiple Vercel preview URLs via wildcard check below
 ].filter(Boolean);
 
 const isOriginAllowed = (origin) => {
-  if (!origin) return true; // server-to-server
+  if (!origin) return true;
   if (ALLOWED_ORIGINS.includes(origin)) return true;
-  // Allow any *.vercel.app subdomain for preview deployments
   if (origin.endsWith('.vercel.app')) return true;
+  if (origin.endsWith('.onrender.com')) return true;
   return false;
 };
 
 const corsOptions = {
   origin: isProd
-    ? (origin, cb) => {
-        if (isOriginAllowed(origin)) return cb(null, true);
-        cb(new Error('Not allowed by CORS'));
-      }
+    ? (origin, cb) => isOriginAllowed(origin) ? cb(null, true) : cb(new Error('CORS'))
     : '*',
   credentials: true,
 };
 
+// ── Socket.IO ─────────────────────────────────────────────────────
 const io = new Server(server, {
   cors: isProd
-    ? {
-        origin: (origin, cb) => {
-          if (isOriginAllowed(origin)) return cb(null, true);
-          cb(new Error('Not allowed by CORS'));
-        },
-        methods: ['GET', 'POST'],
-        credentials: true,
-      }
-    : { origin: '*', methods: ['GET', 'POST'] }
+    ? { origin: (o, cb) => isOriginAllowed(o) ? cb(null, true) : cb(new Error('CORS')), methods: ['GET', 'POST'], credentials: true }
+    : { origin: '*', methods: ['GET', 'POST'] },
+  pingTimeout:  60000,
+  pingInterval: 25000,
+  transports: ['websocket', 'polling'],
+  // Socket auth middleware
+  allowRequest: (req, fn) => fn(null, true),
 });
+
+// JWT auth middleware for sockets
+io.use(authenticateSocket);
 
 app.use(cors(corsOptions));
-
-// Make io accessible in routes
 app.set('io', io);
+app.use(compression({ filter: (req, res) => !req.headers['x-no-compression'] && compression.filter(req, res), level: 6 }));
+app.use(helmet({ contentSecurityPolicy: false, crossOriginOpenerPolicy: false }));
+app.use((req, res, next) => { res.removeHeader('Cross-Origin-Opener-Policy'); res.removeHeader('Cross-Origin-Embedder-Policy'); next(); });
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500, standardHeaders: true, legacyHeaders: false }));
+app.use(express.json({ limit: '10mb' })); // Reduced — no more base64 images in messages
 
-// Enable gzip compression for all responses
-app.use(compression({
-  filter: (req, res) => {
-    if (req.headers['x-no-compression']) return false;
-    return compression.filter(req, res);
-  },
-  level: 6,
-}));
-app.use(helmet({
-  contentSecurityPolicy: false,
-  crossOriginOpenerPolicy: false,
-}));
-
-// Explicitly remove COOP header so Firebase popup can communicate back
-app.use((req, res, next) => {
-  res.removeHeader('Cross-Origin-Opener-Policy');
-  res.removeHeader('Cross-Origin-Embedder-Policy');
-  next();
-});
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false }));
-app.use(express.json({ limit: '20mb' }));
-
-app.use('/api/auth',          require('./routes/auth'));
-app.use('/api/users',         require('./routes/users'));
-app.use('/api/matches',       require('./routes/matches'));
-app.use('/api/mentorship',    require('./routes/mentorship'));
-app.use('/api/messages',      require('./routes/messages'));
-app.use('/api/analytics',     require('./routes/analytics'));
-app.use('/api/posts',         require('./routes/posts'));
-app.use('/api/notifications', require('./routes/notifications'));
-app.use('/api/news',          require('./routes/news'));
-app.use('/api/groups',        require('./routes/groups'));
+// ── Routes ────────────────────────────────────────────────────────
+app.use('/api/auth',             require('./routes/auth'));
+app.use('/api/users',            require('./routes/users'));
+app.use('/api/matches',          require('./routes/matches'));
+app.use('/api/mentorship',       require('./routes/mentorship'));
+app.use('/api/messages',         require('./routes/messages'));
+app.use('/api/analytics',        require('./routes/analytics'));
+app.use('/api/posts',            require('./routes/posts'));
+app.use('/api/notifications',    require('./routes/notifications'));
+app.use('/api/news',             require('./routes/news'));
+app.use('/api/groups',           require('./routes/groups'));
 app.use('/api/message-requests', require('./routes/messageRequests'));
-app.use('/api/admin',         require('./routes/admin'));
+app.use('/api/admin',            require('./routes/admin'));
+app.use('/api/upload',           require('./routes/upload'));
 
-// ── Health check — used by keep-alive ping ───────────────────────
-app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: Date.now(), uptime: process.uptime() }));
 
-// ── Image proxy (avoids CORS/403 on external logos) ─────────────
+// Image proxy
 app.get('/api/proxy-image', async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).end();
   try {
-    const https = require('https');
-    const http2 = require('http');
+    const https = require('https'), http2 = require('http');
     const parsed = new URL(url);
     const proto = parsed.protocol === 'https:' ? https : http2;
     proto.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (imgRes) => {
@@ -110,184 +107,150 @@ app.get('/api/proxy-image', async (req, res) => {
       res.setHeader('Cache-Control', 'public, max-age=86400');
       imgRes.pipe(res);
     }).on('error', () => res.status(404).end());
-  } catch {
-    res.status(400).end();
-  }
+  } catch { res.status(400).end(); }
 });
 
-// ── Serve React frontend in production ──────────────────────────
+// ── Frontend ──────────────────────────────────────────────────────
 if (isProd) {
-  const frontendDist = path.join(__dirname, 'frontend', 'dist');
-  app.use(express.static(frontendDist, {
-    maxAge: '1y',
-    etag: true,
-    setHeaders: (res, filePath) => {
-      if (filePath.endsWith('index.html')) {
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      }
-    },
+  const dist = path.join(__dirname, 'frontend', 'dist');
+  app.use(express.static(dist, {
+    maxAge: '1y', etag: true,
+    setHeaders: (res, fp) => { if (fp.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache'); },
   }));
-  // SPA fallback — only for actual page routes, not assets or Firebase
   app.get('*', (req, res) => {
     const p = req.path;
-    if (
-      p.startsWith('/api') ||
-      p.startsWith('/socket.io') ||
-      p.startsWith('/__/') ||          // Firebase auth handler
-      p.startsWith('/assets/') ||      // JS/CSS chunks
-      p.match(/\.(js|css|png|jpg|jpeg|svg|ico|webp|woff|woff2|ttf|map|gz|br)$/)
-    ) return;
-    res.sendFile(path.join(frontendDist, 'index.html'));
+    if (p.startsWith('/api') || p.startsWith('/socket.io') || p.startsWith('/__/') ||
+        p.startsWith('/assets/') || p.match(/\.(js|css|png|jpg|jpeg|svg|ico|webp|woff|woff2|ttf|map|gz|br)$/)) return;
+    res.sendFile(path.join(dist, 'index.html'));
   });
 } else {
   app.get('/', (req, res) => res.json({ message: 'AlumniAI API running' }));
-
-// ── Firebase Auth handler proxy (needed for signInWithRedirect on non-Firebase-Hosted domains)
-app.get('/__/auth/*', async (req, res) => {
-  try {
-    const firebaseUrl = `https://alumni-network-mru.firebaseapp.com${req.path}${req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''}`;
-    const https = require('https');
-    https.get(firebaseUrl, (fbRes) => {
-      res.setHeader('Content-Type', fbRes.headers['content-type'] || 'text/html');
-      fbRes.pipe(res);
-    }).on('error', () => res.status(404).end());
-  } catch {
-    res.status(404).end();
-  }
-});
+  app.get('/__/auth/*', async (req, res) => {
+    try {
+      const https = require('https');
+      const fbUrl = `https://alumni-network-mru.firebaseapp.com${req.path}${req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''}`;
+      https.get(fbUrl, (fbRes) => { res.setHeader('Content-Type', fbRes.headers['content-type'] || 'text/html'); fbRes.pipe(res); }).on('error', () => res.status(404).end());
+    } catch { res.status(404).end(); }
+  });
 }
 
-// Socket.io — real-time chat + notifications + WebRTC signaling
-const onlineUsers = new Map(); // userId -> Set of socketIds
-const typingUsers = new Map(); // roomId -> Map(userId -> timeout)
-
+// ── Socket.IO Event Handlers ──────────────────────────────────────
 io.on('connection', (socket) => {
-  let connectedUserId = null;
+  // Register user in their personal room (authenticated via middleware)
+  registerUser(io, socket);
 
-  // Join personal room for notifications + track online status
-  socket.on('join_user', (userId) => {
-    socket.join(`user_${userId}`);
-    connectedUserId = userId;
-
-    // Track socket
-    if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
-    onlineUsers.get(userId).add(socket.id);
-
-    // Always broadcast online status (handles reconnects too)
-    io.emit('user:online', { userId, online: true });
-  });
-
-  // Chat rooms (mentorship)
-  socket.on('join_room', (mentorshipId) => socket.join(mentorshipId));
-  socket.on('send_message', (data) => io.to(data.mentorshipId).emit('receive_message', data));
-
-  // Typing indicator for 1-on-1 chats
-  socket.on('user:typing', ({ mentorshipId, userId, name }) => {
-    if (!typingUsers.has(mentorshipId)) typingUsers.set(mentorshipId, new Map());
-    const roomTyping = typingUsers.get(mentorshipId);
-    
-    // Clear existing timeout
-    if (roomTyping.has(userId)) clearTimeout(roomTyping.get(userId));
-    
-    // Broadcast typing
-    socket.to(mentorshipId).emit('user:typing', { userId, name, isTyping: true });
-    
-    // Auto-clear after 3 seconds
-    const timeout = setTimeout(() => {
-      socket.to(mentorshipId).emit('user:typing', { userId, name, isTyping: false });
-      roomTyping.delete(userId);
-    }, 3000);
-    
-    roomTyping.set(userId, timeout);
-  });
-
-  socket.on('user:stop_typing', ({ mentorshipId, userId }) => {
-    if (typingUsers.has(mentorshipId)) {
-      const roomTyping = typingUsers.get(mentorshipId);
-      if (roomTyping.has(userId)) {
-        clearTimeout(roomTyping.get(userId));
-        roomTyping.delete(userId);
-      }
-    }
-    socket.to(mentorshipId).emit('user:typing', { userId, isTyping: false });
-  });
-
-  // Group chat rooms
-  socket.on('join_group', (groupId) => socket.join(`group_${groupId}`));
-  socket.on('send_group_message', (data) => io.to(`group_${data.groupId}`).emit('receive_group_message', data));
-  
-  // Typing indicator for groups
-  socket.on('group:typing', ({ groupId, name, userId }) => {
-    if (!typingUsers.has(`group_${groupId}`)) typingUsers.set(`group_${groupId}`, new Map());
-    const roomTyping = typingUsers.get(`group_${groupId}`);
-    
-    if (roomTyping.has(userId)) clearTimeout(roomTyping.get(userId));
-    
-    socket.to(`group_${groupId}`).emit('group:typing', { name, userId, isTyping: true });
-    
-    const timeout = setTimeout(() => {
-      socket.to(`group_${groupId}`).emit('group:typing', { name, userId, isTyping: false });
-      roomTyping.delete(userId);
-    }, 3000);
-    
-    roomTyping.set(userId, timeout);
-  });
-
-  socket.on('group:stop_typing', ({ groupId, userId }) => {
-    if (typingUsers.has(`group_${groupId}`)) {
-      const roomTyping = typingUsers.get(`group_${groupId}`);
-      if (roomTyping.has(userId)) {
-        clearTimeout(roomTyping.get(userId));
-        roomTyping.delete(userId);
-      }
-    }
-    socket.to(`group_${groupId}`).emit('group:typing', { userId, isTyping: false });
-  });
-
-  // Check if a user is online
+  // ── Online status check ──
   socket.on('user:check_online', ({ userId }) => {
-    const isOnline = onlineUsers.has(String(userId)) && onlineUsers.get(String(userId)).size > 0;
-    socket.emit('user:status', { userId, online: isOnline });
+    socket.emit('user:status', { userId, online: isUserOnline(userId) });
   });
 
-  // ── WebRTC Signaling ──
-  socket.on('call:initiate', ({ to, from, fromUser, callType, offer }) => {
-    io.to(`user_${to}`).emit('call:incoming', { from, fromUser, callType, offer, socketId: socket.id });
+  // ── Typing indicators ──
+  // Routed via user room — no conversation room needed
+  socket.on('user:typing', ({ conversationId, recipientId, isTyping }) => {
+    handleTyping(io, socket, { conversationId, recipientId, isTyping });
   });
+
+  // ── Group typing ──
+  socket.on('group:typing', ({ groupId, name, userId }) => {
+    socket.to(`group_${groupId}`).emit('group:typing', { name, userId, isTyping: true });
+    setTimeout(() => socket.to(`group_${groupId}`).emit('group:typing', { userId, isTyping: false }), 4000);
+  });
+
+  // ── Group rooms (still needed for group chats) ──
+  socket.on('join_group', (groupId) => socket.join(`group_${groupId}`));
+
+  // ── Message delivery ACK ──
+  // Called by receiver's client to confirm delivery
+  socket.on('msg:delivered', ({ messageId, conversationId, senderId }) => {
+    io.to(`user_${senderId}`).emit('msg:status', {
+      messageId,
+      conversationId,
+      status: 'delivered',
+    });
+  });
+
+  // ── Message seen ACK ──
+  socket.on('msg:seen', ({ conversationId, senderId, lastSeenId }) => {
+    io.to(`user_${senderId}`).emit('msg:status', {
+      conversationId,
+      lastSeenId,
+      status: 'seen',
+      seenBy: socket.userId,
+    });
+  });
+
+  // ── WebRTC Signaling ─────────────────────────────────────────────
+  socket.on('call:initiate', ({ to, from, fromUser, callType, offer }) => {
+    // Check if recipient is online
+    if (!isUserOnline(to)) {
+      socket.emit('call:unavailable', { reason: 'offline' });
+      return;
+    }
+    io.to(`user_${to}`).emit('call:incoming', { from, fromUser, callType, offer });
+  });
+
+  socket.on('call:ringing', ({ to }) => {
+    io.to(`user_${to}`).emit('call:ringing');
+  });
+
   socket.on('call:answer', ({ to, answer }) => {
     io.to(`user_${to}`).emit('call:answered', { answer });
   });
+
   socket.on('call:ice', ({ to, candidate }) => {
     io.to(`user_${to}`).emit('call:ice', { candidate });
   });
-  socket.on('call:reject', ({ to }) => {
-    io.to(`user_${to}`).emit('call:rejected');
+
+  socket.on('call:reject', ({ to, reason }) => {
+    io.to(`user_${to}`).emit('call:rejected', { reason: reason || 'declined' });
   });
+
   socket.on('call:end', ({ to }) => {
     io.to(`user_${to}`).emit('call:ended');
   });
 
-  socket.on('disconnect', () => {
-    if (connectedUserId) {
-      const sockets = onlineUsers.get(connectedUserId);
-      if (sockets) {
-        sockets.delete(socket.id);
-        if (sockets.size === 0) {
-          onlineUsers.delete(connectedUserId);
-          // Broadcast offline status
-          io.emit('user:online', { userId: connectedUserId, online: false });
-        }
-      }
-    }
+  socket.on('call:busy', ({ to }) => {
+    io.to(`user_${to}`).emit('call:busy');
+  });
+
+  socket.on('call:timeout', ({ to }) => {
+    io.to(`user_${to}`).emit('call:timeout');
+  });
+
+  // ── Disconnect ────────────────────────────────────────────────────
+  socket.on('disconnect', (reason) => {
+    console.log(`[Socket] Disconnect: ${socket.userId} reason: ${reason}`);
+    handleDisconnect(io, socket);
+  });
+
+  socket.on('error', (err) => {
+    console.error(`[Socket] Error for ${socket.userId}:`, err.message);
   });
 });
 
-mongoose.connect(process.env.MONGO_URI)
+// ── Database + Server Start ───────────────────────────────────────
+mongoose.connect(process.env.MONGO_URI, {
+  maxPoolSize: 10,
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
+})
   .then(() => {
-    console.log('MongoDB connected');
-    server.listen(process.env.PORT, () => {
-      console.log(`Server running on port ${process.env.PORT}`);
-      startKeepAlive(); // prevent Render free tier sleep
+    console.log('[DB] MongoDB connected');
+    server.listen(process.env.PORT || 5001, () => {
+      console.log(`[Server] Running on port ${process.env.PORT || 5001}`);
+      startKeepAlive();
     });
   })
-  .catch(err => console.error('DB error:', err));
+  .catch(err => {
+    console.error('[DB] Connection error:', err);
+    process.exit(1);
+  });
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('[Server] SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    mongoose.connection.close();
+    process.exit(0);
+  });
+});

@@ -451,124 +451,268 @@ function MsgContextMenu({ msg, mine, pos, onClose, onReply, onCopy, onDelete, on
   );
 }
 
-/* ── 1-on-1 Chat Panel ── */
+/* ── 1-on-1 Chat Panel — Production Grade ── */
 function ChatPanel({ mentorship, user, socketRef }) {
   const navigate = useNavigate();
-  const [messages, setMessages] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [lightboxSrc, setLightboxSrc] = useState(null);
-  const [ctxMenu, setCtxMenu] = useState(null);
-  const [replyTo, setReplyTo] = useState(null);
+  const { newMessageEvent, msgStatusEvent, msgAckEvent, markSeen, sendTyping, checkOnline } = useSocket();
+
+  const [messages,      setMessages]      = useState([]);
+  const [loading,       setLoading]       = useState(true);
+  const [hasMore,       setHasMore]       = useState(false);
+  const [loadingMore,   setLoadingMore]   = useState(false);
+  const [lightboxSrc,   setLightboxSrc]   = useState(null);
+  const [ctxMenu,       setCtxMenu]       = useState(null);
+  const [replyTo,       setReplyTo]       = useState(null);
   const [isOtherOnline, setIsOtherOnline] = useState(false);
-  const bottomRef = useRef();
-  const id = mentorship._id;
+
+  const bottomRef    = useRef();
+  const topRef       = useRef();
+  const oldestMsgRef = useRef(null); // for cursor pagination
+
+  const id  = mentorship._id;
   const uid = String(user?._id || user?.id || '');
   const other = String(mentorship.student?._id || mentorship.student) === uid
-    ? mentorship.alumni
-    : mentorship.student;
+    ? mentorship.alumni : mentorship.student;
   const otherId = String(other?._id || '');
 
-  // Load messages whenever the chat id changes
+  // ── Initial load — most recent 30 messages ──
   useEffect(() => {
     setLoading(true);
     setMessages([]);
-    api.get(`/messages/${id}`)
-      .then(r => setMessages(r.data))
+    oldestMsgRef.current = null;
+
+    api.get(`/messages/${id}?limit=30`)
+      .then(r => {
+        const msgs = r.data.messages || r.data || [];
+        setMessages(msgs);
+        setHasMore(r.data.hasMore || false);
+        if (msgs.length > 0) oldestMsgRef.current = msgs[0]._id;
+        // Mark as seen
+        api.post(`/messages/${id}/seen`).catch(() => {});
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [id]);
 
+  // ── Load older messages (infinite scroll up) ──
+  const loadMore = async () => {
+    if (loadingMore || !hasMore || !oldestMsgRef.current) return;
+    setLoadingMore(true);
+    try {
+      const r = await api.get(`/messages/${id}?before=${oldestMsgRef.current}&limit=30`);
+      const older = r.data.messages || r.data || [];
+      if (older.length > 0) {
+        setMessages(prev => [...older, ...prev]);
+        oldestMsgRef.current = older[0]._id;
+        setHasMore(r.data.hasMore || false);
+      }
+    } catch {}
+    setLoadingMore(false);
+  };
+
+  // ── Online status ──
+  useEffect(() => {
+    checkOnline(otherId).then(online => setIsOtherOnline(online));
+    const socket = socketRef?.current;
+    if (!socket) return;
+    const handler = ({ userId, online }) => {
+      if (String(userId) === otherId) setIsOtherOnline(online);
+    };
+    socket.on('user:online', handler);
+    socket.on('user:status', handler);
+    return () => { socket.off('user:online', handler); socket.off('user:status', handler); };
+  }, [otherId, socketRef?.current]);
+
+  // ── Reconnect sync — fetch missed messages ──
   useEffect(() => {
     const socket = socketRef?.current;
     if (!socket) return;
-
-    socket.emit('join_room', id);
-
-    const onMessage = msg => {
-      // Only handle messages for this chat
-      const msgMid = msg.mentorshipId || msg.mentorship;
-      if (msgMid && String(msgMid) !== String(id)) return;
-      setMessages(prev => prev.find(m => m._id === msg._id) ? prev : [...prev, msg]);
-      // Mark as read silently if we're the recipient (fire and forget)
-      if (String(msg.sender?._id || msg.sender) !== uid) {
-        api.post(`/messages/${id}/read`).catch(() => {});
-      }
-    };
-
-    const onReaction = ({ messageId, reactions }) => {
-      setMessages(prev => prev.map(m => m._id === messageId ? { ...m, reactions } : m));
-    };
-
-    const onRead = ({ readBy, mentorshipId: mid }) => {
-      if (mid && String(mid) !== String(id)) return;
-      if (String(readBy) !== uid) {
-        setMessages(prev => prev.map(m => ({ ...m, read: true })));
-      }
-    };
-
-    const handleStatus = ({ userId, online }) => {
-      if (String(userId) === otherId) setIsOtherOnline(online);
-    };
-
     const onConnect = () => {
-      socket.emit('join_room', id);
-      socket.emit('user:check_online', { userId: otherId });
-      // Re-fetch messages on reconnect to catch any missed ones
-      api.get(`/messages/${id}`).then(r => setMessages(r.data)).catch(() => {});
+      if (messages.length === 0) return;
+      const lastId = messages[messages.length - 1]?._id;
+      if (!lastId) return;
+      api.get(`/messages/${id}?after=${lastId}&limit=50`)
+        .then(r => {
+          const missed = r.data.messages || r.data || [];
+          if (missed.length > 0) {
+            setMessages(prev => {
+              const existingIds = new Set(prev.map(m => String(m._id)));
+              const newOnes = missed.filter(m => !existingIds.has(String(m._id)));
+              return [...prev, ...newOnes];
+            });
+          }
+        }).catch(() => {});
     };
-
-    socket.on('receive_message', onMessage);
-    socket.on('message:reaction', onReaction);
-    socket.on('messages:read', onRead);
-    socket.on('user:online', handleStatus);
-    socket.on('user:status', handleStatus);
     socket.on('connect', onConnect);
+    return () => socket.off('connect', onConnect);
+  }, [id, messages.length, socketRef?.current]);
 
-    socket.emit('user:check_online', { userId: otherId });
+  // ── Incoming messages from socket ──
+  useEffect(() => {
+    if (!newMessageEvent) return;
+    const convId = newMessageEvent.conversationId || newMessageEvent.mentorshipId || newMessageEvent.mentorship;
+    if (String(convId) !== String(id)) return;
+    if (newMessageEvent.deleted) {
+      setMessages(prev => prev.map(m =>
+        String(m._id) === String(newMessageEvent.messageId)
+          ? { ...m, text: 'This message was deleted', deletedAt: new Date() }
+          : m
+      ));
+      return;
+    }
+    setMessages(prev => {
+      // Deduplicate by _id and clientMsgId
+      const exists = prev.find(m =>
+        String(m._id) === String(newMessageEvent._id) ||
+        (newMessageEvent.clientMsgId && m.clientMsgId === newMessageEvent.clientMsgId)
+      );
+      if (exists) return prev;
+      return [...prev, newMessageEvent];
+    });
+    // Mark as seen if we're the recipient and chat is open
+    const senderId = String(newMessageEvent.sender?._id || newMessageEvent.sender || '');
+    if (senderId !== uid) {
+      api.post(`/messages/${id}/seen`).catch(() => {});
+      markSeen(id, senderId, newMessageEvent._id);
+    }
+  }, [newMessageEvent]);
 
-    return () => {
-      socket.off('receive_message', onMessage);
-      socket.off('message:reaction', onReaction);
-      socket.off('messages:read', onRead);
-      socket.off('user:online', handleStatus);
-      socket.off('user:status', handleStatus);
-      socket.off('connect', onConnect);
-    };
-  }, [id, otherId, socketRef?.current]);
+  // ── Message status updates (delivered/seen) ──
+  useEffect(() => {
+    if (!msgStatusEvent) return;
+    if (String(msgStatusEvent.conversationId) !== String(id)) return;
 
-  // Scroll to bottom when new messages arrive
-  useEffect(() => { 
-    if (messages.length > 0) bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); 
-  }, [messages]);
+    if (msgStatusEvent.type === 'reaction') {
+      setMessages(prev => prev.map(m =>
+        String(m._id) === String(msgStatusEvent.messageId)
+          ? { ...m, reactions: msgStatusEvent.reactions }
+          : m
+      ));
+      return;
+    }
 
-  // Scroll to bottom instantly when chat first loads
+    if (msgStatusEvent.status === 'seen') {
+      setMessages(prev => prev.map(m =>
+        String(m.sender?._id || m.sender) === uid ? { ...m, status: 'seen' } : m
+      ));
+    } else if (msgStatusEvent.status === 'delivered') {
+      setMessages(prev => prev.map(m =>
+        String(m.sender?._id || m.sender) === uid && m.status === 'sent'
+          ? { ...m, status: 'delivered' }
+          : m
+      ));
+    }
+  }, [msgStatusEvent]);
+
+  // ── Sent ACK — update optimistic message with real _id ──
+  useEffect(() => {
+    if (!msgAckEvent) return;
+    if (String(msgAckEvent.conversationId) !== String(id)) return;
+    setMessages(prev => prev.map(m =>
+      m.clientMsgId && m.clientMsgId === msgAckEvent.clientMsgId
+        ? { ...m, _id: msgAckEvent.messageId, status: 'sent', createdAt: msgAckEvent.createdAt }
+        : m
+    ));
+  }, [msgAckEvent]);
+
+  // ── Scroll to bottom ──
+  useEffect(() => {
+    if (messages.length > 0) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages.length]);
+
   useEffect(() => {
     if (!loading && messages.length > 0) {
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'auto' }), 50);
     }
   }, [loading, id]);
 
+  // ── Send message with optimistic UI ──
   const handleSend = async (payload) => {
-    const fullPayload = replyTo ? { ...payload, replyToId: replyTo._id } : payload;
-    const res = await api.post(`/messages/${id}`, fullPayload).catch(() => null);
-    if (res) {
-      // Server already emits receive_message to the room (including sender).
-      // The socket handler deduplicates by _id — no need to add manually.
-      setReplyTo(null);
+    const clientMsgId = `${uid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const fullPayload = {
+      ...payload,
+      replyToId: replyTo?._id,
+      clientMsgId,
+    };
+
+    // Optimistic append
+    const optimistic = {
+      _id:            clientMsgId, // temp ID
+      clientMsgId,
+      conversationId: id,
+      sender:         user,
+      text:           payload.text || '',
+      type:           payload.type || 'text',
+      attachment:     payload.attachment,
+      replyTo:        replyTo,
+      status:         'pending',
+      createdAt:      new Date().toISOString(),
+      reactions:      [],
+    };
+    setMessages(prev => [...prev, optimistic]);
+    setReplyTo(null);
+
+    try {
+      await api.post(`/messages/${id}`, fullPayload);
+      // ACK comes via socket msg:ack event — updates status to 'sent'
+    } catch {
+      // Mark as failed
+      setMessages(prev => prev.map(m =>
+        m.clientMsgId === clientMsgId ? { ...m, status: 'failed' } : m
+      ));
+    }
+  };
+
+  // ── Retry failed message ──
+  const retryMessage = async (msg) => {
+    setMessages(prev => prev.map(m =>
+      m.clientMsgId === msg.clientMsgId ? { ...m, status: 'pending' } : m
+    ));
+    try {
+      await api.post(`/messages/${id}`, {
+        text: msg.text, type: msg.type, attachment: msg.attachment,
+        clientMsgId: msg.clientMsgId,
+      });
+    } catch {
+      setMessages(prev => prev.map(m =>
+        m.clientMsgId === msg.clientMsgId ? { ...m, status: 'failed' } : m
+      ));
     }
   };
 
   const handleCtx = (e, msg, mine) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const rect = e.currentTarget.getBoundingClientRect();
-    // Position menu — keep it on screen
+    e.preventDefault(); e.stopPropagation();
     const x = Math.min(e.clientX, window.innerWidth - 220);
     const y = Math.min(e.clientY, window.innerHeight - 320);
     setCtxMenu({ msg, mine, x, y });
   };
 
+  // ── Status tick rendering ──
+  const renderTick = (msg) => {
+    if (!msg || String(msg.sender?._id || msg.sender) !== uid) return null;
+    const s = msg.status;
+    if (s === 'pending') return <span className="mc-tick mc-tick-pending">🕐</span>;
+    if (s === 'failed')  return <span className="mc-tick mc-tick-failed" title="Tap to retry">⚠️</span>;
+    if (s === 'seen')    return <span className="mc-tick mc-tick-read">✓✓</span>;
+    if (s === 'delivered') return <span className="mc-tick mc-tick-delivered">✓✓</span>;
+    return <span className="mc-tick">✓</span>;
+  };
+
   const grouped = messages.reduce((acc, msg) => {
+    const day = new Date(msg.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    if (!acc[day]) acc[day] = [];
+    acc[day].push(msg);
+    return acc;
+  }, {});
+  const handleCtx2 = (e, msg, mine) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const x = Math.min(e.clientX, window.innerWidth - 220);
+    const y = Math.min(e.clientY, window.innerHeight - 320);
+    setCtxMenu({ msg, mine, x, y });
+  };
+
+  const grouped2 = messages.reduce((acc, msg) => {
     const day = new Date(msg.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
     if (!acc[day]) acc[day] = [];
     acc[day].push(msg);
@@ -660,6 +804,18 @@ function ChatPanel({ mentorship, user, socketRef }) {
 
       {/* Messages */}
       <div className="mc-body">
+        {/* Load more older messages */}
+        {hasMore && (
+          <div style={{ textAlign: 'center', padding: '.5rem' }}>
+            <button
+              onClick={loadMore}
+              disabled={loadingMore}
+              style={{ fontSize: '.75rem', color: '#a78bfa', background: 'rgba(124,69,184,.1)', border: '1px solid rgba(124,69,184,.2)', borderRadius: 20, padding: '.3rem .9rem', cursor: 'pointer', fontFamily: 'DM Sans,sans-serif' }}
+            >
+              {loadingMore ? 'Loading…' : '↑ Load older messages'}
+            </button>
+          </div>
+        )}
         {loading ? <div className="mc-empty">Loading…</div> : messages.length === 0 ? (
           <div className="mc-empty"><div style={{fontSize:'2rem',marginBottom:'.5rem'}}>👋</div><div>No messages yet. Say hello!</div></div>
         ) : (() => {
@@ -676,8 +832,9 @@ function ChatPanel({ mentorship, user, socketRef }) {
               return (
                 <div
                   key={msg._id || i}
-                  className={`mc-msg-row ${mine ? 'mine' : 'theirs'}`}
+                  className={`mc-msg-row ${mine ? 'mine' : 'theirs'}${msg.status === 'failed' ? ' msg-failed' : ''}`}
                   onContextMenu={e => handleCtx(e, msg, mine)}
+                  onClick={msg.status === 'failed' ? () => retryMessage(msg) : undefined}
                 >
                   {!mine && (
                     <div
@@ -711,11 +868,7 @@ function ChatPanel({ mentorship, user, socketRef }) {
                     <div className="mc-time">
                       {msgNum && <span className="mc-msg-num">#{msgNum}</span>}
                       {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      {mine && (
-                        <span className={`mc-tick${msg.read ? ' mc-tick-read' : ''}`}>
-                          {msg.read ? '✓✓' : '✓'}
-                        </span>
-                      )}
+                      {mine && renderTick(msg)}
                     </div>
                   </div>
                   {mine && (
@@ -1541,7 +1694,7 @@ function CreateGroupModal({ type, onClose, onCreate }) {
 export default function MessagesInbox() {
   const { id: activeId } = useParams();
   const { user }    = useAuth();
-  const { socketRef, newMessageEvent } = useSocket();
+  const { socketRef, newMessageEvent, convUpdatedEvent } = useSocket();
   const navigate    = useNavigate();
 
   const [tab, setTab]           = useState('chats');
@@ -1552,30 +1705,64 @@ export default function MessagesInbox() {
   const [showCreate, setShowCreate] = useState(false);
   const [msgRequests, setMsgRequests] = useState([]);
   const [showRequests, setShowRequests] = useState(false);
-  const [following, setFollowing] = useState([]); // users I follow for new chat
-  const [lastMessages, setLastMessages] = useState({}); // { [mentorshipId]: { text, type, senderId, time, isFromMe } }
-  const [unreadCounts, setUnreadCounts] = useState({}); // { [mentorshipId]: number }
+  const [following, setFollowing] = useState([]);
+  const [lastMessages, setLastMessages] = useState({});
+  const [unreadCounts, setUnreadCounts] = useState({});
 
-  const canCreateCommunity = user?.role === 'alumni';
+  const uid = String(user?._id || user?.id || '');
 
-  // Re-join all rooms when socket reconnects (handles page refresh / reconnect)
+  // ── Handle conv:updated events (sidebar state from server) ──
   useEffect(() => {
-    const socket = socketRef?.current;
-    if (!socket || convs.length === 0) return;
-    const rejoin = () => convs.forEach(m => socket.emit('join_room', m._id));
-    socket.on('connect', rejoin);
-    // Join immediately if already connected
-    if (socket.connected) rejoin();
-    return () => socket.off('connect', rejoin);
-  }, [socketRef?.current, convs.length]);
+    if (!convUpdatedEvent) return;
+    const mid = convUpdatedEvent.conversationId;
+    if (!mid) return;
 
+    // Update last message preview
+    if (convUpdatedEvent.lastMessage) {
+      const lm = convUpdatedEvent.lastMessage;
+      const senderId = String(lm.sender?._id || lm.sender || '');
+      setLastMessages(prev => ({
+        ...prev,
+        [mid]: {
+          text:      lm.text || '',
+          type:      lm.type,
+          senderId,
+          time:      lm.createdAt || new Date().toISOString(),
+          isFromMe:  senderId === uid,
+        }
+      }));
+    }
+
+    // Update unread count
+    if (convUpdatedEvent.unreadCount !== undefined && activeId !== mid) {
+      setUnreadCounts(prev => ({ ...prev, [mid]: convUpdatedEvent.unreadCount }));
+    }
+
+    // Move conv to top
+    setConvs(prev => {
+      const idx = prev.findIndex(c => c._id === mid);
+      if (idx < 0) {
+        api.get(`/mentorship/${mid}`).then(r => {
+          if (r.data?._id) {
+            setConvs(p => p.find(c => c._id === r.data._id) ? p : [r.data, ...p]);
+            socketRef?.current?.emit('join_group', r.data._id); // not needed but harmless
+          }
+        }).catch(() => {});
+        return prev;
+      }
+      const updated = [...prev];
+      const [conv] = updated.splice(idx, 1);
+      return [{ ...conv, updatedAt: convUpdatedEvent.updatedAt || new Date().toISOString() }, ...updated];
+    });
+  }, [convUpdatedEvent]);
+
+  // ── Also handle newMessageEvent for backward compat ──
   useEffect(() => {
     if (!newMessageEvent || newMessageEvent.isGroup) return;
-    const mid = newMessageEvent.mentorshipId || newMessageEvent.mentorship;
+    const mid = newMessageEvent.conversationId || newMessageEvent.mentorshipId || newMessageEvent.mentorship;
     if (!mid) return;
     const senderId = String(newMessageEvent.sender?._id || newMessageEvent.sender || '');
-    const myId = String(user?._id || user?.id || '');
-    const isFromMe = senderId === myId;
+    const isFromMe = senderId === uid;
     const isActiveChat = activeId === mid;
 
     setLastMessages(prev => ({
@@ -1593,49 +1780,44 @@ export default function MessagesInbox() {
       }
     }));
 
-    // Increment unread if not from me and not currently viewing this chat
     if (!isFromMe && !isActiveChat) {
       setUnreadCounts(prev => ({ ...prev, [mid]: (prev[mid] || 0) + 1 }));
     }
 
-    // Move this conv to top of list (or fetch it if not in list yet)
     setConvs(prev => {
       const idx = prev.findIndex(c => c._id === mid);
       if (idx < 0) {
-        // New conversation not in list — fetch it
         api.get(`/mentorship/${mid}`).then(r => {
-          if (r.data?._id) {
-            setConvs(p => p.find(c => c._id === r.data._id) ? p : [r.data, ...p]);
-            // Also join the room for this new conversation
-            socketRef?.current?.emit('join_room', r.data._id);
-          }
+          if (r.data?._id) setConvs(p => p.find(c => c._id === r.data._id) ? p : [r.data, ...p]);
         }).catch(() => {});
         return prev;
       }
-      // Always move to top (even if idx === 0, updatedAt needs refreshing)
       const updated = [...prev];
       const [conv] = updated.splice(idx, 1);
       return [{ ...conv, updatedAt: new Date().toISOString() }, ...updated];
     });
   }, [newMessageEvent]);
 
-  // When activeId changes, clear unread for that chat
+  // When activeId changes, clear unread for that chat (server + local)
   useEffect(() => {
     if (activeId) {
       setUnreadCounts(prev => ({ ...prev, [activeId]: 0 }));
+      // Tell server to reset unread count
+      api.post(`/messages/${activeId}/seen`).catch(() => {});
     }
   }, [activeId]);
 
   useEffect(() => {
     api.get('/mentorship/my').then(r => {
-      const accepted = r.data.filter(m => m.status === 'accepted');
-      // Sort by updatedAt descending (most recent first)
+      const accepted = r.data;
       accepted.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
       setConvs(accepted);
 
-      // Initialize lastMessages from each conversation's last message
+      // Initialize lastMessages and unreadCounts from server data
       const myId = String(user?._id || user?.id || '');
       const initLast = {};
+      const initUnread = {};
+
       accepted.forEach(m => {
         if (m.lastMessage) {
           const senderId = String(m.lastMessage.sender?._id || m.lastMessage.sender || '');
@@ -1645,20 +1827,20 @@ export default function MessagesInbox() {
                 : m.lastMessage.type === 'voice' ? '🎤 Voice message'
                 : m.lastMessage.type === 'file'  ? '📎 File'
                 : (m.lastMessage.text || ''),
-            type: m.lastMessage.type,
+            type:      m.lastMessage.type,
             senderId,
-            time: m.lastMessage.createdAt || m.updatedAt,
-            isFromMe: senderId === myId,
+            time:      m.lastMessage.createdAt || m.updatedAt,
+            isFromMe:  senderId === myId,
           };
         }
+        // Use server-side unread count
+        if (m.unreadCount > 0 && m._id !== activeId) {
+          initUnread[m._id] = m.unreadCount;
+        }
       });
-      setLastMessages(initLast);
 
-      // Join all conversation rooms so we receive real-time messages
-      const socket = socketRef?.current;
-      if (socket) {
-        accepted.forEach(m => socket.emit('join_room', m._id));
-      }
+      setLastMessages(initLast);
+      setUnreadCounts(initUnread);
     }).catch(() => {}).finally(() => setLoading(false));
     api.get('/message-requests/inbox').then(r => setMsgRequests(r.data)).catch(() => {});
     api.get('/users/all').then(r => setFollowing(r.data)).catch(() => {});

@@ -203,7 +203,6 @@ export default function CallManager() {
     };
     return () => { delete window.__startCall; };
   }, [socketRef?.current]);
-
   const initiateCall = async (targetId, type, mshipId) => {
     try {
       const stream = await getMedia(type);
@@ -342,7 +341,7 @@ export default function CallManager() {
       try { await pcRef.current?.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
     };
 
-    const onRejected = () => {
+    const onRejected = ({ reason }) => {
       if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
       cleanup();
     };
@@ -350,19 +349,33 @@ export default function CallManager() {
       if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
       cleanup();
     };
+    const onBusy = () => {
+      if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
+      alert('User is busy on another call.');
+      cleanup();
+    };
+    const onUnavailable = ({ reason }) => {
+      if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
+      alert(reason === 'offline' ? 'User is offline. Try again later.' : 'Call unavailable.');
+      cleanup();
+    };
 
-    socket.on('call:incoming', onIncoming);
-    socket.on('call:answered', onAnswered);
-    socket.on('call:ice',      onIce);
-    socket.on('call:rejected', onRejected);
-    socket.on('call:ended',    onEnded);
+    socket.on('call:incoming',  onIncoming);
+    socket.on('call:answered',  onAnswered);
+    socket.on('call:ice',       onIce);
+    socket.on('call:rejected',  onRejected);
+    socket.on('call:ended',     onEnded);
+    socket.on('call:busy',      onBusy);
+    socket.on('call:unavailable', onUnavailable);
 
     return () => {
-      socket.off('call:incoming', onIncoming);
-      socket.off('call:answered', onAnswered);
-      socket.off('call:ice',      onIce);
-      socket.off('call:rejected', onRejected);
-      socket.off('call:ended',    onEnded);
+      socket.off('call:incoming',   onIncoming);
+      socket.off('call:answered',   onAnswered);
+      socket.off('call:ice',        onIce);
+      socket.off('call:rejected',   onRejected);
+      socket.off('call:ended',      onEnded);
+      socket.off('call:busy',       onBusy);
+      socket.off('call:unavailable',onUnavailable);
     };
   }, [socketRef?.current]);
 

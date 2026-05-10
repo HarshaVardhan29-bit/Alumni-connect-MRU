@@ -91,23 +91,38 @@ router.get('/my', protect, async (req, res) => {
     const Message = require('../models/Message');
 
     const list = await Mentorship.find({
-      $or: [{ student: req.user._id }, { alumni: req.user._id }]
+      $or: [{ student: req.user._id }, { alumni: req.user._id }],
+      status: 'accepted',
     })
       .populate('student', 'firstName lastName email industry careerGoals targetIndustry avatar role')
       .populate('alumni',  'firstName lastName email industry company designation batch skills bio avatar role')
-      .sort('-updatedAt'); // sort by most recently updated
+      .sort('-updatedAt')
+      .lean();
 
-    // Attach last message for each conversation
-    const withLastMsg = await Promise.all(list.map(async (m) => {
-      const lastMsg = await Message.findOne({ mentorship: m._id })
-        .sort('-createdAt')
-        .select('text type sender createdAt')
-        .populate('sender', 'firstName lastName')
-        .lean();
-      return { ...m.toObject(), lastMessage: lastMsg || null };
+    // Attach last message + unread count for each conversation
+    const withMeta = await Promise.all(list.map(async (m) => {
+      const myId = String(req.user._id);
+
+      // Get last message (use stored lastMessage if available, else query)
+      let lastMsg = m.lastMessage;
+      if (!lastMsg?._id) {
+        lastMsg = await Message.findOne({ conversationId: m._id })
+          .sort('-createdAt')
+          .select('text type sender createdAt')
+          .lean();
+      }
+
+      // Get unread count from server (source of truth)
+      const unreadCount = m.unreadCounts?.[myId] || 0;
+
+      return {
+        ...m,
+        lastMessage: lastMsg || null,
+        unreadCount,
+      };
     }));
 
-    res.json(withLastMsg);
+    res.json(withMeta);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 

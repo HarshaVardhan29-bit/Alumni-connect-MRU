@@ -24,6 +24,11 @@ o.mc-shell{display:grid;grid-template-columns:260px 1fr 280px;height:100vh;overf
 .mc-time{font-size:.65rem;color:var(--muted);margin-top:.25rem;display:flex;align-items:center;gap:.3rem}
 .mc-tick { color: var(--muted); font-size: .72rem; }
 .mc-tick-read { color: #4ade80; }
+.mc-tick-delivered { color: #a78bfa; }
+.mc-tick-pending { color: var(--muted); font-size: .65rem; opacity: .7; }
+.mc-tick-failed { color: #ef4444; cursor: pointer; font-size: .72rem; }
+.msg-failed .mc-bubble { opacity: .7; border: 1px solid rgba(239,68,68,.3) !important; }
+.mc-msg-num { color: var(--muted); font-size: .6rem; opacity: .5; }
 .mc-system-msg{text-align:center;font-size:.72rem;color:var(--muted);padding:.3rem 1rem;font-style:italic}
 .mc-group-sender{font-size:.7rem;font-weight:700;color:#c9a84c;margin-bottom:.2rem;display:flex;align-items:center;gap:.4rem}
 .mc-group-sender-role{font-weight:400;color:var(--muted);text-transform:uppercase;font-size:.6rem;letter-spacing:.06em}
