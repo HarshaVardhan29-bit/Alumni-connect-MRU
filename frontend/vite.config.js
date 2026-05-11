@@ -5,44 +5,52 @@ import { compression } from 'vite-plugin-compression2';
 export default defineConfig({
   plugins: [
     react(),
-    // Gzip
-    compression({ algorithm: 'gzip', exclude: [/\.(br|gz)$/] }),
-    // Brotli (better compression than gzip)
+    compression({ algorithm: 'gzip',          exclude: [/\.(br|gz)$/] }),
     compression({ algorithm: 'brotliCompress', exclude: [/\.(br|gz)$/], filename: '[path][base].br' }),
   ],
 
-  // Required for Capacitor
   base: './',
 
   build: {
     minify: 'oxc',
-    // Increase inline limit — small assets inlined as base64 (fewer requests)
     assetsInlineLimit: 4096,
+    cssCodeSplit: true,
+    sourcemap: false,
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
+        // Each lazy-imported page becomes its own chunk automatically.
+        // manualChunks handles shared vendor libraries.
         manualChunks(id) {
-          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/react-router-dom')) {
+          // Core React — loaded first, cached forever
+          if (id.includes('node_modules/react/') ||
+              id.includes('node_modules/react-dom/') ||
+              id.includes('node_modules/react-router-dom/') ||
+              id.includes('node_modules/scheduler/')) {
             return 'react-vendor';
           }
-          if (id.includes('node_modules/recharts')) {
-            return 'chart-vendor';
-          }
-          if (id.includes('node_modules/firebase')) {
+          // Firebase — large, rarely changes
+          if (id.includes('node_modules/firebase/') ||
+              id.includes('node_modules/@firebase/')) {
             return 'firebase-vendor';
           }
-          if (id.includes('node_modules/socket.io-client')) {
+          // Socket.IO
+          if (id.includes('node_modules/socket.io-client/') ||
+              id.includes('node_modules/engine.io-client/')) {
             return 'socket-vendor';
           }
+          // Charts — only loaded on analytics page
+          if (id.includes('node_modules/recharts/') ||
+              id.includes('node_modules/d3-')) {
+            return 'chart-vendor';
+          }
+          // Admin pages — never loaded by regular users
           if (id.includes('/src/admin/')) {
             return 'admin';
           }
         },
       },
     },
-    chunkSizeWarningLimit: 1000,
-    sourcemap: false,
-    // CSS code splitting
-    cssCodeSplit: true,
   },
 
   optimizeDeps: {
