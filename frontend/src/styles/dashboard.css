@@ -1,35 +1,29 @@
 /* ===== SHELL =====
- * Production mobile-first layout:
- * - Body handles vertical scroll (single scroll container)
- * - No overflow:hidden on shell — that blocks first-touch scroll
- * - ig-main uses natural height, not fixed 100vh
- * - -webkit-overflow-scrolling: touch for momentum scrolling
- * - touch-action: pan-y for instant first-swipe response
+ * Desktop: ig-shell is fixed viewport, ig-main scrolls inside it
+ * Mobile: ig-main uses natural height, body/ig-main scrolls
  */
 .ig-shell {
   display: block;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;   /* Desktop: clip to viewport, ig-main scrolls */
   background: var(--bg);
-  /* NO overflow:hidden — that was blocking mobile scroll */
 }
 .ig-main {
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
   background: var(--bg);
   margin-left: 72px;
-  /* Single scroll container — natural document flow */
   overflow-y: auto;
   overflow-x: hidden;
-  /* Momentum scrolling on iOS */
   -webkit-overflow-scrolling: touch;
-  /* Instant first-touch response — no delay */
   touch-action: pan-y;
-  /* Prevent scroll chaining to body */
   overscroll-behavior-y: contain;
 }
 /* Chat page needs full height without scroll */
-.ig-main:has(.mc-shell) { overflow: hidden; height: 100dvh; }
+.ig-main:has(.mc-shell) { overflow: hidden; }
 /* legacy aliases */
-.dash-shell { display: flex !important; min-height: 100dvh; background: var(--bg); position: relative; }
+.dash-shell { display: flex !important; height: 100vh; height: 100dvh; overflow: hidden; background: var(--bg); position: relative; }
 .dash-main { flex: 1 !important; overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; min-width: 0; position: relative; z-index: 1; background: var(--bg); }
 /* ===== INSTAGRAM-STYLE SIDEBAR ===== */
 .sb2 {
@@ -835,48 +829,41 @@
 /* ═══════════════════════════════════════════════════════════════
    MOBILE BREAKPOINT  ≤ 768px
    
-   KEY FIXES:
-   - Remove overflow:hidden from shell (was blocking first-touch scroll)
-   - Remove fixed height calc() from ig-main (was causing scroll delay)
-   - Use padding-top/bottom instead of height subtraction
-   - Body scrolls naturally — single scroll container
-   - touch-action: pan-y on all scroll containers
+   On mobile: override desktop fixed-height to natural scrolling.
+   ig-shell stops clipping, ig-main grows with content.
+   touch-action:pan-y gives instant first-swipe response.
    ═══════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
 
-  /* ── Shell: natural height, NO overflow:hidden ── */
+  /* ── Shell: let content flow naturally on mobile ── */
   .ig-shell {
+    height: auto;
     min-height: 100dvh;
-    /* REMOVED: height: 100dvh — was blocking scroll */
-    /* REMOVED: overflow: hidden — was blocking first-touch */
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    overflow: visible;  /* Remove clip so ig-main can scroll naturally */
   }
 
   /* ── Hide desktop sidebar ── */
   .sb2 { display: none !important; }
 
-  /* ── Main area: natural scroll, padding for fixed header/nav ── */
+  /* ── Main area: natural scroll with padding for fixed bars ── */
   .ig-main {
     margin-left: 0 !important;
-    /* REMOVED: height: calc() — fixed height causes scroll delay */
+    height: auto;
     min-height: 100dvh;
-    padding-top: 52px;   /* space for fixed top header */
-    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px)); /* space for bottom nav */
-    /* Natural overflow — body handles scroll */
+    padding-top: 52px;
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
     overflow-y: auto;
     overflow-x: hidden;
-    /* Momentum scrolling — critical for iOS */
     -webkit-overflow-scrolling: touch;
-    /* Instant first-touch — no delay */
     touch-action: pan-y;
-    /* Prevent bounce chaining */
     overscroll-behavior-y: contain;
   }
 
-  /* Chat page: fixed height needed for chat layout */
+  /* Chat page: needs fixed height for chat layout */
   .ig-main:has(.mc-shell) {
     overflow: hidden;
     height: 100dvh;
+    min-height: unset;
     padding-top: 0;
     padding-bottom: 0;
   }
@@ -1026,15 +1013,15 @@
    ═══════════════════════════════════════════════════════════════ */
 @media (max-width: 480px) {
   .ig-main {
-    /* Natural height — no fixed calc() */
     min-height: 100dvh;
+    height: auto;
     padding-top: 48px;
     padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
     -webkit-overflow-scrolling: touch;
     touch-action: pan-y;
   }
   .mobile-top-header { height: 48px; }
-  .ig-main:has(.mc-shell) { padding-top: 0; height: 100dvh; }
+  .ig-main:has(.mc-shell) { padding-top: 0; height: 100dvh; min-height: unset; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
