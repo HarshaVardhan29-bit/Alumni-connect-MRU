@@ -39,22 +39,33 @@ function getUserSockets(userId) {
 
 /**
  * Authenticate socket connection via JWT
+ * 
+ * Non-blocking: decode token without DB lookup for speed.
+ * If token is invalid/missing, still allow connection but userId = null.
+ * Routes that need auth check socket.userId themselves.
  */
 async function authenticateSocket(socket, next) {
   try {
     const token = socket.handshake.auth?.token ||
                   socket.handshake.headers?.authorization?.replace('Bearer ', '');
-    if (!token) return next(new Error('Authentication required'));
+
+    if (!token) {
+      // Allow connection without auth — socket won't be in any user room
+      socket.userId = null;
+      socket.user = null;
+      return next();
+    }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select('_id firstName lastName avatar role').lean();
-    if (!user) return next(new Error('User not found'));
-
-    socket.userId = String(user._id);
-    socket.user = user;
+    // Set userId from token — no DB lookup needed for auth
+    socket.userId = String(decoded.id);
+    socket.user = { _id: decoded.id };
     next();
   } catch (err) {
-    next(new Error('Invalid token'));
+    // Invalid token — allow connection but no userId
+    socket.userId = null;
+    socket.user = null;
+    next();
   }
 }
 
@@ -63,6 +74,12 @@ async function authenticateSocket(socket, next) {
  */
 function registerUser(io, socket) {
   const userId = socket.userId;
+
+  // If no userId (unauthenticated), don't register
+  if (!userId) {
+    console.log(`[Socket] Unauthenticated connection ${socket.id} — ignoring`);
+    return;
+  }
 
   // Join personal room
   socket.join(`user_${userId}`);
@@ -82,7 +99,7 @@ function registerUser(io, socket) {
  */
 function handleDisconnect(io, socket) {
   const userId = socket.userId;
-  if (!userId) return;
+  if (!userId) return; // unauthenticated socket — nothing to clean up
 
   const sockets = onlineUsers.get(userId);
   if (sockets) {

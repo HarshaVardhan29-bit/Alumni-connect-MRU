@@ -57,9 +57,9 @@ export function SocketProvider({ children }) {
     const socket = io(SOCKET_URL, {
       auth: { token },  // JWT auth — server validates via middleware
       reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      reconnectionAttempts: Infinity,
+      reconnectionDelay: 2000,        // wait 2s before first retry
+      reconnectionDelayMax: 10000,    // max 10s between retries
+      reconnectionAttempts: 15,       // stop after 15 attempts (not Infinity)
       timeout: 20000,
       transports: ['websocket', 'polling'],
     });
