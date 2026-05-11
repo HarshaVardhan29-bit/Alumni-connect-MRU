@@ -4,28 +4,32 @@ import { useAuth } from '../context/AuthContext';
 import Avatar from './Avatar';
 import api from '../api/axios';
 
+// Production ICE servers — multiple STUN + reliable TURN fallbacks
 const ICE_SERVERS = {
   iceServers: [
+    // Google STUN
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    // Free TURN servers for mobile network relay
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    // Cloudflare STUN
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    // Metered TURN (free tier — more reliable endpoints)
     {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
+      urls: [
+        'turn:a.relay.metered.ca:80',
+        'turn:a.relay.metered.ca:80?transport=tcp',
+        'turn:a.relay.metered.ca:443',
+        'turn:a.relay.metered.ca:443?transport=tcp',
+      ],
+      username:   'openrelayproject',
       credential: 'openrelayproject',
     },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
+    // Twilio STUN (public)
+    { urls: 'stun:global.stun.twilio.com:3478' },
   ],
+  iceCandidatePoolSize: 10,
 };
 
 function createRingTone() {
@@ -48,12 +52,7 @@ function createRingTone() {
       if (!stopped) setTimeout(play, 1800);
     };
     play();
-    return {
-      stop: () => {
-        stopped = true;
-        try { ctx.close(); } catch {}
-      }
-    };
+    return { stop: () => { stopped = true; try { ctx.close(); } catch {} } };
   } catch { return { stop: () => {} }; }
 }
 
@@ -68,9 +67,9 @@ const SpeakerIcon= () => <svg viewBox="0 0 24 24" width="20" height="20" fill="c
 
 export default function CallManager() {
   const { user } = useAuth();
-  const { socketRef } = useSocket();  // ← destructure correctly
+  const { socketRef } = useSocket();
 
-  const [callState,    setCallState]    = useState('idle'); // idle | calling | incoming | active
+  const [callState,    setCallState]    = useState('idle');
   const [callType,     setCallType]     = useState('audio');
   const [remoteUser,   setRemoteUser]   = useState(null);
   const [remoteId,     setRemoteId]     = useState(null);
@@ -82,20 +81,22 @@ export default function CallManager() {
 
   const pcRef          = useRef(null);
   const localStream    = useRef(null);
-  const remoteStream   = useRef(null); // store remote stream until video element mounts
+  const remoteStream   = useRef(null);
   const localVideoRef  = useRef(null);
   const remoteVideoRef = useRef(null);
   const timerRef       = useRef(null);
   const ringRef        = useRef(null);
   const pendingOffer   = useRef(null);
   const pendingFromId  = useRef(null);
+  // Use refs for all values needed in callbacks — avoids stale closures
   const callStateRef   = useRef('idle');
   const remoteIdRef    = useRef(null);
-  const mentorshipRef  = useRef(null);
+  const mentorshipRef  = useRef(null);  // always up-to-date mentorshipId
   const callTypeRef    = useRef('audio');
   const durationRef    = useRef(0);
+  const disconnectTimerRef = useRef(null); // grace period before cleanup on disconnect
 
-  // Keep refs in sync
+  // Keep refs in sync with state
   useEffect(() => { callStateRef.current = callState; }, [callState]);
   useEffect(() => { remoteIdRef.current = remoteId; }, [remoteId]);
   useEffect(() => { mentorshipRef.current = mentorshipId; }, [mentorshipId]);
@@ -105,11 +106,8 @@ export default function CallManager() {
   const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
   const cleanup = useCallback(() => {
-    // Stop ring FIRST before anything else
-    if (ringRef.current) {
-      ringRef.current.stop();
-      ringRef.current = null;
-    }
+    if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
+    clearTimeout(disconnectTimerRef.current);
     localStream.current?.getTracks().forEach(t => t.stop());
     localStream.current = null;
     remoteStream.current = null;
@@ -117,6 +115,7 @@ export default function CallManager() {
       pcRef.current.ontrack = null;
       pcRef.current.onicecandidate = null;
       pcRef.current.onconnectionstatechange = null;
+      pcRef.current.oniceconnectionstatechange = null;
       pcRef.current.close();
       pcRef.current = null;
     }
@@ -144,57 +143,91 @@ export default function CallManager() {
     return navigator.mediaDevices.getUserMedia(constraints);
   };
 
+  // Attach remote video — called whenever stream or element is ready
+  const attachRemoteVideo = useCallback(() => {
+    if (remoteVideoRef.current && remoteStream.current) {
+      if (remoteVideoRef.current.srcObject !== remoteStream.current) {
+        remoteVideoRef.current.srcObject = remoteStream.current;
+      }
+      remoteVideoRef.current.play().catch(() => {});
+    }
+  }, []);
+
   const buildPC = useCallback((targetId) => {
     const pc = new RTCPeerConnection(ICE_SERVERS);
+
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) socketRef.current?.emit('call:ice', { to: targetId, candidate });
     };
+
     pc.ontrack = (e) => {
-      const stream = e.streams[0] || new MediaStream([e.track]);
+      console.log('[WebRTC] Remote track received:', e.track.kind);
+      // Use streams[0] if available, otherwise build from track
+      const stream = e.streams?.[0] || (() => {
+        if (!remoteStream.current) remoteStream.current = new MediaStream();
+        remoteStream.current.addTrack(e.track);
+        return remoteStream.current;
+      })();
       remoteStream.current = stream;
-      // Attach immediately if video element already mounted
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = stream;
-        remoteVideoRef.current.play().catch(() => {});
-      }
+      attachRemoteVideo();
     };
+
     pc.onconnectionstatechange = () => {
-      console.log('[WebRTC] Connection state:', pc.connectionState);
-      if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+      const state = pc.connectionState;
+      console.log('[WebRTC] Connection state:', state);
+      if (state === 'connected') {
+        // Clear any pending disconnect timer
+        clearTimeout(disconnectTimerRef.current);
+      } else if (state === 'disconnected') {
+        // Give 8 seconds grace period — mobile networks often briefly disconnect
+        disconnectTimerRef.current = setTimeout(() => {
+          if (pcRef.current?.connectionState === 'disconnected') {
+            cleanup();
+          }
+        }, 8000);
+      } else if (state === 'failed' || state === 'closed') {
+        clearTimeout(disconnectTimerRef.current);
         cleanup();
       }
     };
+
     pc.oniceconnectionstatechange = () => {
-      console.log('[WebRTC] ICE state:', pc.iceConnectionState);
-      if (pc.iceConnectionState === 'failed') {
+      const state = pc.iceConnectionState;
+      console.log('[WebRTC] ICE state:', state);
+      if (state === 'failed') {
+        // Try ICE restart before giving up
+        console.log('[WebRTC] ICE failed — attempting restart');
         pc.restartIce?.();
       }
     };
-    return pc;
-  }, [socketRef, cleanup]);
 
-  // Attach local + remote video whenever state/type changes (video elements just mounted)
+    return pc;
+  }, [socketRef, cleanup, attachRemoteVideo]);
+
+  // Re-attach video whenever call state changes (elements remount)
   useEffect(() => {
+    if (callState !== 'active' && callState !== 'calling') return;
     const attach = () => {
       if (localVideoRef.current && localStream.current) {
-        localVideoRef.current.srcObject = localStream.current;
+        if (localVideoRef.current.srcObject !== localStream.current) {
+          localVideoRef.current.srcObject = localStream.current;
+        }
       }
-      // Attach remote stream if it arrived before the element mounted
-      if (remoteVideoRef.current && remoteStream.current) {
-        remoteVideoRef.current.srcObject = remoteStream.current;
-      }
+      attachRemoteVideo();
     };
     attach();
-    // Retry after DOM settles
     const t1 = setTimeout(attach, 100);
     const t2 = setTimeout(attach, 500);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [callState, callType]);
+    const t3 = setTimeout(attach, 1500);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, [callState, callType, attachRemoteVideo]);
 
   // Expose startCall globally
   useEffect(() => {
     window.__startCall = (targetId, targetUser, type = 'audio', mshipId = null) => {
       if (callStateRef.current !== 'idle') return;
+      // Set ref immediately — don't wait for React state update
+      mentorshipRef.current = mshipId;
       setRemoteUser(targetUser);
       setRemoteId(targetId);
       setCallType(type);
@@ -203,6 +236,7 @@ export default function CallManager() {
     };
     return () => { delete window.__startCall; };
   }, [socketRef?.current]);
+
   const initiateCall = async (targetId, type, mshipId) => {
     try {
       const stream = await getMedia(type);
@@ -210,7 +244,7 @@ export default function CallManager() {
       const pc = buildPC(targetId);
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
       pcRef.current = pc;
-      const offer = await pc.createOffer();
+      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: type === 'video' });
       await pc.setLocalDescription(offer);
       socketRef.current?.emit('call:initiate', {
         to: targetId,
@@ -230,20 +264,18 @@ export default function CallManager() {
       setCallState('calling');
       ringRef.current = createRingTone();
 
-      // ── Send push notification to wake up recipient if their socket is dead ──
+      // Push notification to wake up recipient — use mshipId directly (not from state)
       if (mshipId) {
-        import('../api/axios').then(({ default: api }) => {
-          api.post(`/messages/call-push/${mshipId}`, { callType: type }).catch(() => {});
-        });
+        api.post(`/messages/call-push/${mshipId}`, { callType: type }).catch(() => {});
       }
     } catch (err) {
-      alert('Could not access microphone/camera. Please allow permissions in your browser.');
+      console.error('[Call] initiateCall error:', err);
+      alert('Could not access microphone/camera. Please allow permissions.');
       cleanup();
     }
   };
 
   const answerCall = async () => {
-    // Stop ring immediately
     if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
     try {
       const stream = await getMedia(callTypeRef.current);
@@ -259,17 +291,18 @@ export default function CallManager() {
       setCallState('active');
       startTimer();
     } catch (err) {
+      console.error('[Call] answerCall error:', err);
       alert('Could not access microphone/camera: ' + err.message);
       cleanup();
     }
   };
 
   const rejectCall = () => {
-    // Stop ring immediately
     if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
     socketRef.current?.emit('call:reject', { to: pendingFromId.current });
-    if (mentorshipRef.current) {
-      api.post(`/messages/${mentorshipRef.current}/call`, { callType: callTypeRef.current, status: 'rejected', duration: 0 }).catch(() => {});
+    const mship = mentorshipRef.current;
+    if (mship) {
+      api.post(`/messages/${mship}/call`, { callType: callTypeRef.current, status: 'rejected', duration: 0 }).catch(() => {});
     }
     cleanup();
   };
@@ -278,10 +311,11 @@ export default function CallManager() {
     const to = remoteIdRef.current || pendingFromId.current;
     const dur = durationRef.current;
     const state = callStateRef.current;
+    const mship = mentorshipRef.current; // use ref — always current value
     socketRef.current?.emit('call:end', { to });
-    if (mentorshipRef.current) {
+    if (mship) {
       const status = state === 'calling' ? 'missed' : 'ended';
-      api.post(`/messages/${mentorshipRef.current}/call`, { callType: callTypeRef.current, status, duration: dur }).catch(() => {});
+      api.post(`/messages/${mship}/call`, { callType: callTypeRef.current, status, duration: dur }).catch(() => {});
     }
     cleanup();
   };
@@ -311,37 +345,43 @@ export default function CallManager() {
       setCallType(ct);
       setCallState('incoming');
 
-      // Use fromUser data sent directly — no API call needed
       if (fromUser?.firstName) {
         setRemoteUser(fromUser);
       } else {
-        // Fallback: fetch if not provided
         try {
           const res = await api.get(`/users/${from}`);
           setRemoteUser(res.data);
         } catch {}
       }
 
-      // Stop any existing ring before starting new one
       if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
       ringRef.current = createRingTone();
     };
 
     const onAnswered = async ({ answer }) => {
-      // Stop ring immediately
       if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
       try {
         await pcRef.current?.setRemoteDescription(new RTCSessionDescription(answer));
-      } catch {}
+        console.log('[WebRTC] Remote description set — waiting for ICE');
+      } catch (err) {
+        console.error('[WebRTC] setRemoteDescription failed:', err);
+      }
       setCallState('active');
       startTimer();
     };
 
     const onIce = async ({ candidate }) => {
-      try { await pcRef.current?.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+      try {
+        if (pcRef.current && candidate) {
+          await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+      } catch (err) {
+        // Ignore benign ICE errors
+        if (!err.message?.includes('ICE')) console.warn('[WebRTC] ICE candidate error:', err.message);
+      }
     };
 
-    const onRejected = ({ reason }) => {
+    const onRejected = () => {
       if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
       cleanup();
     };
@@ -354,28 +394,28 @@ export default function CallManager() {
       alert('User is busy on another call.');
       cleanup();
     };
-    const onUnavailable = ({ reason }) => {
+    const onUnavailable = ({ reason } = {}) => {
       if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
       alert(reason === 'offline' ? 'User is offline. Try again later.' : 'Call unavailable.');
       cleanup();
     };
 
-    socket.on('call:incoming',  onIncoming);
-    socket.on('call:answered',  onAnswered);
-    socket.on('call:ice',       onIce);
-    socket.on('call:rejected',  onRejected);
-    socket.on('call:ended',     onEnded);
-    socket.on('call:busy',      onBusy);
+    socket.on('call:incoming',    onIncoming);
+    socket.on('call:answered',    onAnswered);
+    socket.on('call:ice',         onIce);
+    socket.on('call:rejected',    onRejected);
+    socket.on('call:ended',       onEnded);
+    socket.on('call:busy',        onBusy);
     socket.on('call:unavailable', onUnavailable);
 
     return () => {
-      socket.off('call:incoming',   onIncoming);
-      socket.off('call:answered',   onAnswered);
-      socket.off('call:ice',        onIce);
-      socket.off('call:rejected',   onRejected);
-      socket.off('call:ended',      onEnded);
-      socket.off('call:busy',       onBusy);
-      socket.off('call:unavailable',onUnavailable);
+      socket.off('call:incoming',    onIncoming);
+      socket.off('call:answered',    onAnswered);
+      socket.off('call:ice',         onIce);
+      socket.off('call:rejected',    onRejected);
+      socket.off('call:ended',       onEnded);
+      socket.off('call:busy',        onBusy);
+      socket.off('call:unavailable', onUnavailable);
     };
   }, [socketRef?.current]);
 
@@ -395,9 +435,7 @@ export default function CallManager() {
           <div className="call-label">{callType === 'video' ? 'Video' : 'Voice'} call…</div>
           <div className="call-actions">
             <div className="call-action-wrap">
-              <button className="call-btn call-btn-reject" onClick={rejectCall}>
-                <EndIcon />
-              </button>
+              <button className="call-btn call-btn-reject" onClick={rejectCall}><EndIcon /></button>
               <span className="call-btn-label">Decline</span>
             </div>
             <div className="call-action-wrap">
@@ -416,20 +454,29 @@ export default function CallManager() {
 
           {callType === 'video' ? (
             <>
+              {/* Remote video — full screen background */}
               <video
                 ref={el => {
                   remoteVideoRef.current = el;
-                  // Attach stream immediately when element mounts
-                  if (el && remoteStream.current) el.srcObject = remoteStream.current;
+                  if (el && remoteStream.current) {
+                    el.srcObject = remoteStream.current;
+                    el.play().catch(() => {});
+                  }
                 }}
-                autoPlay playsInline className="call-video-remote"
+                autoPlay playsInline
+                className="call-video-remote"
+                style={{ background: '#000' }}
               />
+              {/* Local video — small pip */}
               <video
                 ref={el => {
                   localVideoRef.current = el;
-                  if (el && localStream.current) el.srcObject = localStream.current;
+                  if (el && localStream.current) {
+                    el.srcObject = localStream.current;
+                  }
                 }}
-                autoPlay playsInline muted className="call-video-local"
+                autoPlay playsInline muted
+                className="call-video-local"
               />
               <div className="call-video-overlay">
                 <div className="call-name">{remoteUser?.firstName} {remoteUser?.lastName}</div>
@@ -455,14 +502,10 @@ export default function CallManager() {
               </button>
               <span className="call-ctrl-label">{muted ? 'Unmute' : 'Mute'}</span>
             </div>
-
             <div className="call-ctrl-wrap">
-              <button className="call-ctrl-btn call-ctrl-end" onClick={endCall}>
-                <EndIcon />
-              </button>
+              <button className="call-ctrl-btn call-ctrl-end" onClick={endCall}><EndIcon /></button>
               <span className="call-ctrl-label">End</span>
             </div>
-
             {callType === 'video' && (
               <div className="call-ctrl-wrap">
                 <button className={`call-ctrl-btn${camOff ? ' active' : ''}`} onClick={toggleCam}>
@@ -471,7 +514,6 @@ export default function CallManager() {
                 <span className="call-ctrl-label">{camOff ? 'Cam on' : 'Cam off'}</span>
               </div>
             )}
-
             <div className="call-ctrl-wrap">
               <button className={`call-ctrl-btn${!speaker ? ' active' : ''}`} onClick={() => setSpeaker(s => !s)}>
                 <SpeakerIcon />
