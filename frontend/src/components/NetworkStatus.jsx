@@ -2,75 +2,62 @@ import { useState, useEffect } from 'react';
 
 /**
  * Network Status Indicator
- * Shows when user is offline or has slow connection
+ * Only shows when user is truly offline or on very slow (2G) connection.
+ * Does NOT show for 3G/4G/WiFi — those are fine.
  */
 export default function NetworkStatus() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [connectionSpeed, setConnectionSpeed] = useState('fast');
+  const [isSlow, setIsSlow] = useState(false);
 
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
+    const handleOnline  = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 
-    window.addEventListener('online', handleOnline);
+    window.addEventListener('online',  handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Check connection speed
+    // Only flag as slow on 2G — 3G and above is acceptable
     const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
     if (connection) {
-      const updateConnectionSpeed = () => {
-        const effectiveType = connection.effectiveType;
-        if (effectiveType === 'slow-2g' || effectiveType === '2g') {
-          setConnectionSpeed('slow');
-        } else if (effectiveType === '3g') {
-          setConnectionSpeed('medium');
-        } else {
-          setConnectionSpeed('fast');
-        }
+      const check = () => {
+        const t = connection.effectiveType;
+        setIsSlow(t === 'slow-2g' || t === '2g');
       };
-
-      updateConnectionSpeed();
-      connection.addEventListener('change', updateConnectionSpeed);
-
+      check();
+      connection.addEventListener('change', check);
       return () => {
-        window.removeEventListener('online', handleOnline);
+        window.removeEventListener('online',  handleOnline);
         window.removeEventListener('offline', handleOffline);
-        connection.removeEventListener('change', updateConnectionSpeed);
+        connection.removeEventListener('change', check);
       };
     }
 
     return () => {
-      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('online',  handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
 
-  if (isOnline && connectionSpeed === 'fast') return null;
+  // Only show when offline or on 2G — hide for everything else
+  if (isOnline && !isSlow) return null;
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        padding: '0.5rem 1rem',
-        background: isOnline ? '#f59e0b' : '#ef4444',
-        color: '#fff',
-        textAlign: 'center',
-        fontSize: '0.85rem',
-        fontWeight: 600,
-        zIndex: 10000,
-        boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-      }}
-    >
-      {!isOnline ? (
-        <>📡 You're offline. Some features may not work.</>
-      ) : connectionSpeed === 'slow' ? (
-        <>🐌 Slow connection detected. Loading may take longer.</>
-      ) : (
-        <>⚠️ Limited connectivity. Some features may be slower.</>
-      )}
+    <div style={{
+      position: 'fixed',
+      top: 0, left: 0, right: 0,
+      padding: '0.5rem 1rem',
+      background: isOnline ? '#f59e0b' : '#ef4444',
+      color: '#fff',
+      textAlign: 'center',
+      fontSize: '0.85rem',
+      fontWeight: 600,
+      zIndex: 10000,
+      boxShadow: '0 2px 8px rgba(0,0,0,.15)',
+    }}>
+      {!isOnline
+        ? '📡 You\'re offline. Some features may not work.'
+        : '🐌 Very slow connection. Loading may take longer.'
+      }
     </div>
   );
 }
