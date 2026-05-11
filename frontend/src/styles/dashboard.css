@@ -1,30 +1,11 @@
-/* ===== SHELL =====
- * Desktop: ig-shell is fixed viewport, ig-main scrolls inside it
- * Mobile: ig-main uses natural height, body/ig-main scrolls
- */
-.ig-shell {
-  display: block;
-  height: 100vh;
-  height: 100dvh;
-  overflow: hidden;   /* Desktop: clip to viewport, ig-main scrolls */
-  background: var(--bg);
-}
-.ig-main {
-  height: 100vh;
-  height: 100dvh;
-  background: var(--bg);
-  margin-left: 72px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
-  overscroll-behavior-y: contain;
-}
+/* ===== SHELL ===== */
+.ig-shell { display: block; height: 100vh; overflow: hidden; background: var(--bg); }
+.ig-main  { height: 100vh; overflow-y: auto; background: var(--bg); margin-left: 72px; }
 /* Chat page needs full height without scroll */
-.ig-main:has(.mc-shell) { overflow: hidden; }
+.ig-main:has(.chat3-shell) { overflow: hidden; }
 /* legacy aliases */
-.dash-shell { display: flex !important; height: 100vh; height: 100dvh; overflow: hidden; background: var(--bg); position: relative; }
-.dash-main { flex: 1 !important; overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; min-width: 0; position: relative; z-index: 1; background: var(--bg); }
+.dash-shell { display: flex !important; height: 100vh; overflow: hidden; background: var(--bg); position: relative; }
+.dash-main { flex: 1 !important; overflow-y: auto; min-width: 0; position: relative; z-index: 1; background: var(--bg); }
 /* ===== INSTAGRAM-STYLE SIDEBAR ===== */
 .sb2 {
   width: 72px;
@@ -828,44 +809,33 @@
 
 /* ═══════════════════════════════════════════════════════════════
    MOBILE BREAKPOINT  ≤ 768px
-   
-   On mobile: override desktop fixed-height to natural scrolling.
-   ig-shell stops clipping, ig-main grows with content.
-   touch-action:pan-y gives instant first-swipe response.
    ═══════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
 
-  /* ── Shell: let content flow naturally on mobile ── */
+  /* ── Shell ── */
   .ig-shell {
-    height: auto;
-    min-height: 100dvh;
-    overflow: visible;  /* Remove clip so ig-main can scroll naturally */
+    height: 100dvh;
+    overflow: hidden;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   /* ── Hide desktop sidebar ── */
   .sb2 { display: none !important; }
 
-  /* ── Main area: natural scroll with padding for fixed bars ── */
+  /* ── Main area: full width, account for top header + bottom nav ── */
   .ig-main {
     margin-left: 0 !important;
-    height: auto;
-    min-height: 100dvh;
-    padding-top: 52px;
-    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+    height: calc(100dvh - 52px - 56px - env(safe-area-inset-bottom, 0px));
+    padding-top: 52px; /* space for top header */
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px)); /* space for bottom nav */
     overflow-y: auto;
-    overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
-    touch-action: pan-y;
-    overscroll-behavior-y: contain;
   }
 
-  /* Chat page: needs fixed height for chat layout */
-  .ig-main:has(.mc-shell) {
+  /* Chat page: no scroll on main, let inner panel handle it */
+  .ig-main:has(.chat3-shell) {
     overflow: hidden;
-    height: 100dvh;
-    min-height: unset;
-    padding-top: 0;
-    padding-bottom: 0;
+    padding-top: 52px;
   }
 
   /* ── Mobile top header ── */
@@ -1013,15 +983,12 @@
    ═══════════════════════════════════════════════════════════════ */
 @media (max-width: 480px) {
   .ig-main {
-    min-height: 100dvh;
-    height: auto;
+    height: calc(100dvh - 48px - 56px - env(safe-area-inset-bottom, 0px));
     padding-top: 48px;
     padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
-    -webkit-overflow-scrolling: touch;
-    touch-action: pan-y;
   }
   .mobile-top-header { height: 48px; }
-  .ig-main:has(.mc-shell) { padding-top: 0; height: 100dvh; min-height: unset; }
+  .ig-main:has(.chat3-shell) { padding-top: 48px; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
