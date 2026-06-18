@@ -182,11 +182,11 @@ io.on('connection', (socket) => {
 
   // ── WebRTC Signaling ─────────────────────────────────────────────
   socket.on('call:initiate', ({ to, from, fromUser, callType, offer }) => {
-    // Check if recipient is online
-    if (!isUserOnline(to)) {
-      socket.emit('call:unavailable', { reason: 'offline' });
-      return;
-    }
+    // Always forward the call signal — even if the socket map says "offline".
+    // Mobile PWA sockets disconnect when screen turns off, so isUserOnline()
+    // is unreliable. Let the recipient handle it; if they're truly offline
+    // the event is simply dropped. The caller also sends a push via call-push
+    // route which wakes up the recipient's device.
     io.to(`user_${to}`).emit('call:incoming', { from, fromUser, callType, offer });
   });
 

@@ -94,9 +94,9 @@ export default function CallManager() {
   const mentorshipRef  = useRef(null);  // always up-to-date mentorshipId
   const callTypeRef    = useRef('audio');
   const durationRef    = useRef(0);
-  const disconnectTimerRef = useRef(null); // grace period before cleanup on disconnect
+  const ringTimeoutRef = useRef(null); // auto-end if no answer in 30s
 
-  // Keep refs in sync with state
+  const disconnectTimerRef = useRef(null); // grace period before cleanup on disconnect
   useEffect(() => { callStateRef.current = callState; }, [callState]);
   useEffect(() => { remoteIdRef.current = remoteId; }, [remoteId]);
   useEffect(() => { mentorshipRef.current = mentorshipId; }, [mentorshipId]);
@@ -108,6 +108,7 @@ export default function CallManager() {
   const cleanup = useCallback(() => {
     if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
     clearTimeout(disconnectTimerRef.current);
+    clearTimeout(ringTimeoutRef.current);
     localStream.current?.getTracks().forEach(t => t.stop());
     localStream.current = null;
     remoteStream.current = null;
@@ -264,10 +265,23 @@ export default function CallManager() {
       setCallState('calling');
       ringRef.current = createRingTone();
 
-      // Push notification to wake up recipient — use mshipId directly (not from state)
+      // Push notification to wake up recipient — fires regardless of online status
       if (mshipId) {
         api.post(`/messages/call-push/${mshipId}`, { callType: type }).catch(() => {});
       }
+
+      // Auto-end after 30s if no answer — recipient may be offline or not responding
+      ringTimeoutRef.current = setTimeout(() => {
+        if (callStateRef.current === 'calling') {
+          const to = targetId;
+          socketRef.current?.emit('call:end', { to });
+          const mship = mentorshipRef.current;
+          if (mship) {
+            api.post(`/messages/${mship}/call`, { callType: type, status: 'missed', duration: 0 }).catch(() => {});
+          }
+          cleanup();
+        }
+      }, 30000);
     } catch (err) {
       console.error('[Call] initiateCall error:', err);
       alert('Could not access microphone/camera. Please allow permissions.');
@@ -360,6 +374,7 @@ export default function CallManager() {
 
     const onAnswered = async ({ answer }) => {
       if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
+      clearTimeout(ringTimeoutRef.current);
       try {
         await pcRef.current?.setRemoteDescription(new RTCSessionDescription(answer));
         console.log('[WebRTC] Remote description set — waiting for ICE');
@@ -383,10 +398,12 @@ export default function CallManager() {
 
     const onRejected = () => {
       if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
+      clearTimeout(ringTimeoutRef.current);
       cleanup();
     };
     const onEnded = () => {
       if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
+      clearTimeout(ringTimeoutRef.current);
       cleanup();
     };
     const onBusy = () => {
@@ -396,7 +413,10 @@ export default function CallManager() {
     };
     const onUnavailable = ({ reason } = {}) => {
       if (ringRef.current) { ringRef.current.stop(); ringRef.current = null; }
-      alert(reason === 'offline' ? 'User is offline. Try again later.' : 'Call unavailable.');
+      clearTimeout(ringTimeoutRef.current);
+      // 'offline' reason is no longer sent by server — we always attempt the call.
+      // This handler now only fires for other unavailable reasons.
+      alert('Call unavailable. Please try again.');
       cleanup();
     };
 

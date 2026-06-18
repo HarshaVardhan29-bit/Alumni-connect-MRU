@@ -19,7 +19,6 @@ const Mentorship  = require('../models/Mentorship');
 const mongoose    = require('mongoose');
 const { protect } = require('../middleware/auth');
 const { sendPushToUser } = require('../utils/pushNotification');
-const { isUserOnline }   = require('../utils/socketManager');
 
 const PAGE_SIZE = 30;
 
@@ -272,8 +271,6 @@ router.post('/:convId', protect, async (req, res) => {
       updatedAt: new Date(),
       [`unreadCounts.${otherId}`]: (conv.unreadCounts?.get(otherId) || 0) + 1,
     });
-
-    const recipientOnline = isUserOnline(otherId);
 
     if (io) {
       // Send to recipient
@@ -535,18 +532,19 @@ router.post('/call-push/:convId', protect, async (req, res) => {
     const { callType } = req.body;
     const otherId = getOtherId(conv, req.user._id);
 
-    if (!isUserOnline(otherId)) {
-      await sendPushToUser(otherId, {
-        title: `📞 Incoming ${callType === 'video' ? 'video' : 'voice'} call`,
-        body:  `${req.user.firstName} ${req.user.lastName} is calling you`,
-        url:   `/messages/${req.params.convId}`,
-        type:  'call',
-        requireInteraction: true,
-        data:  { conversationId: req.params.convId, callType, callerId: String(req.user._id) },
-      });
-    }
+    // Always send push — don't gate on isUserOnline.
+    // Mobile sockets disconnect when screen is off, so gating silently drops
+    // the push for backgrounded users. FCM will wake the device.
+    sendPushToUser(otherId, {
+      title: `📞 Incoming ${callType === 'video' ? 'video' : 'voice'} call`,
+      body:  `${req.user.firstName} ${req.user.lastName} is calling you`,
+      url:   `/messages/${req.params.convId}`,
+      type:  'call',
+      requireInteraction: true,
+      data:  { conversationId: req.params.convId, callType, callerId: String(req.user._id) },
+    }).catch(() => {});
 
-    res.json({ sent: !isUserOnline(otherId) });
+    res.json({ sent: true });
   } catch (err) {
     console.error('[Messages CALL-PUSH] Error:', err.message);
     res.json({ sent: false });

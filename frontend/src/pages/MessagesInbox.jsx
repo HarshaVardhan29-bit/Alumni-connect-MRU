@@ -454,7 +454,7 @@ function MsgContextMenu({ msg, mine, pos, onClose, onReply, onCopy, onDelete, on
 /* ── 1-on-1 Chat Panel — Production Grade ── */
 function ChatPanel({ mentorship, user, socketRef }) {
   const navigate = useNavigate();
-  const { newMessageEvent, msgStatusEvent, msgAckEvent, markSeen, checkOnline } = useSocket();
+  const { newMessageEvent, msgStatusEvent, msgAckEvent, markSeen } = useSocket();
 
   const [messages,      setMessages]      = useState([]);
   const [loading,       setLoading]       = useState(true);
@@ -463,7 +463,7 @@ function ChatPanel({ mentorship, user, socketRef }) {
   const [lightboxSrc,   setLightboxSrc]   = useState(null);
   const [ctxMenu,       setCtxMenu]       = useState(null);
   const [replyTo,       setReplyTo]       = useState(null);
-  const [isOtherOnline, setIsOtherOnline] = useState(false);
+  const [otherUser,     setOtherUser]     = useState(null); // full profile for last-seen
 
   const bottomRef      = useRef();
   const oldestMsgRef   = useRef(null);  // ID of oldest loaded message (for load-more cursor)
@@ -561,18 +561,11 @@ function ChatPanel({ mentorship, user, socketRef }) {
     setLoadingMore(false);
   };
 
-  // ── Online status ──
+  // ── Fetch other user's profile for last-seen display ──
   useEffect(() => {
-    checkOnline(otherId).then(online => setIsOtherOnline(online));
-    const socket = socketRef?.current;
-    if (!socket) return;
-    const handler = ({ userId, online }) => {
-      if (String(userId) === otherId) setIsOtherOnline(online);
-    };
-    socket.on('user:online', handler);
-    socket.on('user:status', handler);
-    return () => { socket.off('user:online', handler); socket.off('user:status', handler); };
-  }, [otherId, socketRef?.current]);
+    if (!otherId) return;
+    api.get(`/users/${otherId}`).then(r => setOtherUser(r.data)).catch(() => {});
+  }, [otherId]);
 
   // ── Reconnect sync — fetch missed messages ──
   // Uses ref to avoid stale closure — does NOT depend on messages.length
@@ -820,10 +813,22 @@ function ChatPanel({ mentorship, user, socketRef }) {
         <div className="mc-chat-header-info">
           <div className="mc-chat-header-name">{other?.firstName} {other?.lastName}</div>
           <div className="mc-chat-header-status">
-            {isOtherOnline
-              ? <><span className="mc-online-dot"/>ONLINE</>
-              : <span style={{ color: 'var(--muted)', fontSize: '.65rem', letterSpacing: '.08em' }}>OFFLINE</span>
-            }
+            {(() => {
+              const profile = otherUser || other;
+              const lastSeen = profile?.updatedAt || profile?.lastSeen;
+              if (!lastSeen) return <span style={{ color: 'var(--muted)', fontSize: '.65rem' }}>{profile?.role || ''}</span>;
+              const diff = Date.now() - new Date(lastSeen).getTime();
+              const mins = Math.floor(diff / 60000);
+              const hrs  = Math.floor(diff / 3600000);
+              const days = Math.floor(diff / 86400000);
+              let label;
+              if (mins < 5)        label = 'active recently';
+              else if (mins < 60)  label = `active ${mins}m ago`;
+              else if (hrs < 24)   label = `active ${hrs}h ago`;
+              else if (days === 1) label = 'active yesterday';
+              else                 label = `active ${days}d ago`;
+              return <span style={{ color: 'var(--muted)', fontSize: '.65rem', letterSpacing: '.04em' }}>{label}</span>;
+            })()}
           </div>
         </div>
         <div className="mc-chat-header-actions">
