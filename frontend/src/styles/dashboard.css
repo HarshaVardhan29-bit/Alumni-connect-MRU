@@ -4,7 +4,7 @@
 /* Chat page needs full height without scroll */
 .ig-main:has(.chat3-shell) { overflow: hidden; }
 /* Messages inbox page needs full height */
-.ig-main:has(.mc-shell) { overflow: hidden; height: 100vh; }
+.ig-main:has(.mc-shell) { overflow: hidden; }
 /* legacy aliases */
 .dash-shell { display: flex !important; height: 100vh; overflow: hidden; background: var(--bg); position: relative; }
 .dash-main { flex: 1 !important; overflow-y: auto; min-width: 0; position: relative; z-index: 1; background: var(--bg); }
