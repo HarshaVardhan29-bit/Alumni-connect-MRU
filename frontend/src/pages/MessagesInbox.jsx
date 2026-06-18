@@ -736,15 +736,50 @@ function ChatPanel({ mentorship, user, socketRef }) {
     setCtxMenu({ msg, mine, x, y });
   };
 
-  // ── Status tick rendering ──
+  // ── Status tick rendering — WhatsApp style ──
   const renderTick = (msg) => {
     if (!msg || String(msg.sender?._id || msg.sender) !== uid) return null;
     const s = msg.status;
-    if (s === 'pending') return <span className="mc-tick mc-tick-pending">🕐</span>;
-    if (s === 'failed')  return <span className="mc-tick mc-tick-failed" title="Tap to retry">⚠️</span>;
-    if (s === 'seen')    return <span className="mc-tick mc-tick-read">✓✓</span>;
-    if (s === 'delivered') return <span className="mc-tick mc-tick-delivered">✓✓</span>;
-    return <span className="mc-tick">✓</span>;
+    if (s === 'pending') return (
+      <span className="mc-tick mc-tick-pending" title="Sending…">
+        <svg viewBox="0 0 16 11" width="14" height="11" fill="none">
+          <path d="M1 5.5L5.5 10L15 1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" opacity="0.4"/>
+        </svg>
+      </span>
+    );
+    if (s === 'failed') return (
+      <span className="mc-tick mc-tick-failed" title="Failed — tap to retry">
+        <svg viewBox="0 0 12 12" width="13" height="13" fill="none">
+          <circle cx="6" cy="6" r="5.5" stroke="#ef4444" strokeWidth="1.3"/>
+          <line x1="6" y1="3.5" x2="6" y2="6.5" stroke="#ef4444" strokeWidth="1.3" strokeLinecap="round"/>
+          <circle cx="6" cy="8.5" r=".8" fill="#ef4444"/>
+        </svg>
+      </span>
+    );
+    if (s === 'seen') return (
+      <span className="mc-tick mc-tick-read" title="Seen">
+        <svg viewBox="0 0 18 11" width="16" height="11" fill="none">
+          <path d="M1 5.5L5.5 10L14.5 1" stroke="#4ade80" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+          <path d="M5 5.5L9.5 10L18.5 1" stroke="#4ade80" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </span>
+    );
+    if (s === 'delivered') return (
+      <span className="mc-tick mc-tick-delivered" title="Delivered">
+        <svg viewBox="0 0 18 11" width="16" height="11" fill="none">
+          <path d="M1 5.5L5.5 10L14.5 1" stroke="#a78bfa" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+          <path d="M5 5.5L9.5 10L18.5 1" stroke="#a78bfa" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </span>
+    );
+    // sent — single grey tick
+    return (
+      <span className="mc-tick" title="Sent">
+        <svg viewBox="0 0 16 11" width="14" height="11" fill="none">
+          <path d="M1 5.5L5.5 10L15 1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </span>
+    );
   };
 
   const grouped = messages.reduce((acc, msg) => {
@@ -913,7 +948,6 @@ function ChatPanel({ mentorship, user, socketRef }) {
                       </div>
                     )}
                     <div className="mc-time">
-                      {msgNum && <span className="mc-msg-num">#{msgNum}</span>}
                       {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       {mine && renderTick(msg)}
                     </div>
