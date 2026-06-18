@@ -15,10 +15,13 @@ if (savedFontSize === 'Small') document.documentElement.style.fontSize = '14px';
 if (savedFontSize === 'Large') document.documentElement.style.fontSize = '17px';
 
 // Register Service Worker for offline support (web only)
+// NOTE: firebase-messaging-sw.js is registered separately by pushSubscribe.js
+// for FCM. To avoid scope conflicts, we skip sw.js registration in production
+// since firebase-messaging-sw.js is the single root SW that handles everything.
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     navigator.serviceWorker
-      .register('/sw.js')
+      .register('/firebase-messaging-sw.js', { scope: '/' })
       .then((reg) => console.log('[SW] Registered:', reg.scope))
       .catch((err) => console.log('[SW] Registration failed:', err));
   });
