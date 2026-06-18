@@ -313,16 +313,17 @@ router.post('/:convId', protect, async (req, res) => {
       });
     }
 
-    // Push only if offline
-    if (!recipientOnline) {
-      await sendPushToUser(otherId, {
-        title: `${req.user.firstName} ${req.user.lastName}`,
-        body:  msgPreview(msg),
-        url:   `/messages/${req.params.convId}`,
-        type:  'message',
-        data:  { conversationId: req.params.convId, messageId: String(msg._id) },
-      });
-    }
+    // Always send push — socket handles delivery if truly active,
+    // FCM handles it if screen is off / app is backgrounded on mobile.
+    // Do NOT gate on isUserOnline: mobile sockets stay "connected" even
+    // when the screen is off, causing push to be silently skipped.
+    sendPushToUser(otherId, {
+      title: `${req.user.firstName} ${req.user.lastName}`,
+      body:  msgPreview(msg),
+      url:   `/messages/${req.params.convId}`,
+      type:  'message',
+      data:  { conversationId: req.params.convId, messageId: String(msg._id) },
+    }).catch(() => {}); // fire-and-forget, don't block response
 
     res.status(201).json(populated);
   } catch (err) {

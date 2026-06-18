@@ -19,7 +19,6 @@ const User         = require('../models/User');
 const Notification = require('../models/Notification');
 const { protect }  = require('../middleware/auth');
 const { sendPushToUser } = require('../utils/pushNotification');
-const { isUserOnline }   = require('../utils/socketManager');
 
 const PAGE_SIZE = 20;
 
@@ -70,21 +69,21 @@ async function emitNotif(req, notif) {
     // Only emit to the recipient's personal room
     req.app.get('io')?.to(`user_${notif.recipient}`).emit('notification', populated);
 
-    // Push only if offline
-    if (!isUserOnline(notif.recipient)) {
-      const urlMap = {
-        like:    `/post/${notif.post}`,
-        comment: `/post/${notif.post}`,
-        retweet: `/post/${notif.post}`,
-        follow:  `/profile/${notif.sender}`,
-      };
-      await sendPushToUser(notif.recipient, {
-        title: 'MRU Connect',
-        body:  notif.message,
-        url:   urlMap[notif.type] || '/feed',
-        type:  notif.type,
-      });
-    }
+    // Always send push — don't gate on isUserOnline.
+    // Mobile sockets stay "connected" even when screen is off,
+    // so gating would silently skip push for backgrounded mobile users.
+    const urlMap = {
+      like:    `/post/${notif.post}`,
+      comment: `/post/${notif.post}`,
+      retweet: `/post/${notif.post}`,
+      follow:  `/profile/${notif.sender}`,
+    };
+    sendPushToUser(notif.recipient, {
+      title: 'MRU Connect',
+      body:  notif.message,
+      url:   urlMap[notif.type] || '/feed',
+      type:  notif.type,
+    }).catch(() => {}); // fire-and-forget
   } catch {}
 }
 

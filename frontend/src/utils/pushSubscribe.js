@@ -4,17 +4,23 @@ import api from '../api/axios';
 
 const VAPID_KEY = import.meta.env.VITE_FIREBASE_VAPID_KEY;
 
+// Guard: only subscribe once per page load — prevents stacking onMessage listeners
+let _subscribed = false;
+let _swReg = null;
+
 /**
  * Register the Firebase Messaging service worker explicitly.
  * FCM requires firebase-messaging-sw.js at the root.
  */
 async function getFCMServiceWorker() {
+  if (_swReg) return _swReg; // reuse cached registration
   if (!('serviceWorker' in navigator)) return null;
   try {
     // Check if firebase-messaging-sw.js is already registered
     const registrations = await navigator.serviceWorker.getRegistrations();
     for (const reg of registrations) {
       if (reg.active?.scriptURL?.includes('firebase-messaging-sw.js')) {
+        _swReg = reg;
         return reg;
       }
     }
@@ -33,6 +39,7 @@ async function getFCMServiceWorker() {
       });
       setTimeout(resolve, 3000); // fallback timeout
     });
+    _swReg = reg;
     return reg;
   } catch (err) {
     console.log('[FCM] SW registration failed:', err.message);
@@ -99,26 +106,29 @@ export async function subscribeToPush() {
     await api.post('/users/fcm-token', { token });
     console.log('[FCM] Token registered:', token.slice(0, 20) + '...');
 
-    // Handle foreground messages (app is open and in focus)
-    onMessage(messaging, (payload) => {
-      console.log('[FCM] Foreground message:', payload);
-      const title = payload.notification?.title || 'MRU Connect';
-      const body  = payload.notification?.body  || '';
-      const url   = payload.fcmOptions?.link || payload.data?.url || '/';
+    // Only attach foreground message handler once — prevents duplicate notifications
+    if (!_subscribed) {
+      _subscribed = true;
+      onMessage(messaging, (payload) => {
+        console.log('[FCM] Foreground message:', payload);
+        const title = payload.notification?.title || 'MRU Connect';
+        const body  = payload.notification?.body  || '';
+        const url   = payload.fcmOptions?.link || payload.data?.url || '/';
 
-      // Show notification even when app is open
-      if (Notification.permission === 'granted' && swReg) {
-        swReg.showNotification(title, {
-          body,
-          icon:  '/favicon.svg',
-          badge: '/favicon.svg',
-          data:  { url, ...payload.data },
-          tag:   payload.data?.type || 'general',
-          renotify: true,
-          vibrate: [200, 100, 200],
-        });
-      }
-    });
+        // Show notification even when app is open
+        if (Notification.permission === 'granted' && swReg) {
+          swReg.showNotification(title, {
+            body,
+            icon:  '/favicon.svg',
+            badge: '/favicon.svg',
+            data:  { url, ...payload.data },
+            tag:   payload.data?.type || 'general',
+            renotify: true,
+            vibrate: [200, 100, 200],
+          });
+        }
+      });
+    }
 
   } catch (err) {
     console.log('[FCM] Setup failed:', err.message);

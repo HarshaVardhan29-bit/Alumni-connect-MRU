@@ -16,32 +16,34 @@ export default function InAppNotification() {
   const location = useLocation();
   const [notif, setNotif] = useState(null);
   const timerRef = useRef(null);
+  const lastEventRef = useRef(null); // prevent re-processing same event
   const uid = String(user?._id || user?.id || '');
 
   useEffect(() => {
     if (!newMessageEvent) return;
 
+    // Deduplicate — same event object can fire on re-renders
+    const eventKey = newMessageEvent.timestamp + String(newMessageEvent._id || '');
+    if (lastEventRef.current === eventKey) return;
+    lastEventRef.current = eventKey;
+
     const msg = newMessageEvent;
     const senderId = String(msg.sender?._id || msg.sender || '');
 
-    // Don't show if it's our own message
+    // Don't show for our own messages
     if (senderId === uid) return;
 
-    // Build the chat path for this message
-    const mentorshipId = msg.mentorshipId || msg.mentorship;
+    // Build the correct chat path
+    // Backend sends: conversationId (primary), mentorshipId and mentorship as fallbacks
+    const convId = msg.conversationId || msg.mentorshipId || msg.mentorship;
     const groupId = msg.groupId || msg.group?._id || msg.group;
     const chatPath = msg.isGroup
       ? `/messages/${groupId}`
-      : `/messages/${mentorshipId}`;
+      : `/messages/${convId}`;
 
     // Don't show if already on that exact chat
     const currentPath = location.pathname;
-    if (
-      currentPath === chatPath ||
-      currentPath.startsWith(chatPath + '?') ||
-      // Also suppress if on /messages and the active chat matches
-      (currentPath.includes('/messages/') && currentPath.includes(msg.isGroup ? groupId : mentorshipId))
-    ) return;
+    if (currentPath === chatPath) return;
 
     // Build notification data
     const senderName = msg.sender?.firstName
@@ -70,12 +72,14 @@ export default function InAppNotification() {
     timerRef.current = setTimeout(() => setNotif(null), 4000);
   }, [newMessageEvent]);
 
-  // Dismiss when user navigates to the chat
+  // Dismiss immediately when user navigates to the chat
   useEffect(() => {
-    if (notif && location.pathname.includes(notif.chatPath.split('/').pop())) {
+    if (!notif) return;
+    if (location.pathname === notif.chatPath) {
       setNotif(null);
+      clearTimeout(timerRef.current);
     }
-  }, [location.pathname]);
+  }, [location.pathname, notif]);
 
   if (!notif) return null;
 
@@ -85,6 +89,7 @@ export default function InAppNotification() {
       onClick={() => {
         navigate(notif.chatPath);
         setNotif(null);
+        clearTimeout(timerRef.current);
       }}
     >
       <div className="in-app-notif-avatar">
@@ -98,7 +103,7 @@ export default function InAppNotification() {
       </div>
       <button
         className="in-app-notif-close"
-        onClick={e => { e.stopPropagation(); setNotif(null); }}
+        onClick={e => { e.stopPropagation(); setNotif(null); clearTimeout(timerRef.current); }}
       >✕</button>
     </div>
   );
